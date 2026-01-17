@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageChops, ImageFilter, ImageDraw
+from PIL import Image, ImageChops, ImageFilter, ImageDraw, ImageOps
 import io
 import random
 
@@ -8,47 +8,49 @@ A4_WIDTH = 2480
 A4_HEIGHT = 3508
 MM_TO_PX = 11.81
 
-def gerar_contorno_profissional(img, sangria_mm, espessura_linha):
-    """Cria sangria branca sólida, sem furos internos e com curvas lisas"""
+def gerar_contorno_perfeito(img, sangria_mm, espessura_linha):
+    """Gera uma silhueta sólida, sem furos internos e com curvas arredondadas"""
     sangria_px = int(sangria_mm * MM_TO_PX)
-    # 1. Obter a máscara alfa e garantir que seja binária (preto e branco total)
-    alpha = img.split()[3].point(lambda p: 255 if p > 0 else 0)
     
-    # 2. FECHAR BURACOS INTERNOS (Estratégia de Inundação)
-    # Criamos uma máscara um pouco maior para garantir que não haja furos
-    mask_contorno = alpha.filter(ImageFilter.MaxFilter(sangria_px * 2 + 1))
+    # 1. Criar máscara binária da imagem (remove transparências parciais)
+    alpha = img.split()[3].point(lambda p: 255 if p > 50 else 0)
     
-    # Técnica de Flood Fill para garantir que o interior seja 100% branco
-    # Preenchemos a partir das bordas (0,0) para identificar o que é fundo externo
-    bg = Image.new("L", (mask_contorno.width + 2, mask_contorno.height + 2), 0)
-    bg.paste(mask_contorno, (1, 1))
+    # 2. FECHAR BURACOS INTERNOS (Inundação/Flood Fill)
+    # Criamos uma versão maior da máscara para garantir que o fundo seja detectado corretamente
+    mask_temp = alpha.filter(ImageFilter.MaxFilter(3))
+    bg = Image.new("L", (mask_temp.width + 2, mask_temp.height + 2), 0)
+    bg.paste(mask_temp, (1, 1))
+    # Preenche o fundo externo com branco
     ImageDraw.floodfill(bg, (0, 0), 255)
-    # Invertemos para obter apenas o interior preenchido
-    mask_solida = ImageOps.invert(bg.crop((1, 1, mask_contorno.width + 1, mask_contorno.height + 1)))
-    # Somamos a máscara original com a sólida
-    mask_final = ImageChops.screen(mask_contorno, mask_solida)
+    # Inverte para que apenas o corpo do personagem (incluindo buracos internos) fique branco
+    mask_solida = ImageOps.invert(bg.crop((1, 1, mask_temp.width + 1, mask_temp.height + 1)))
+    # Garante que a máscara original esteja inclusa
+    mask_corpo = ImageChops.lighter(alpha, mask_solida)
 
-    # 3. SUAVIZAÇÃO GAUSSIANA (Eliminar "Colinas" e degraus)
-    mask_final = mask_final.filter(ImageFilter.GaussianBlur(radius=5))
-    mask_final = mask_final.point(lambda p: 255 if p > 128 else 0)
+    # 3. CRIAR A SANGRIA BRANCA SUAVE (Arredondamento)
+    # Expandimos a máscara sólida para o tamanho da sangria
+    mask_sangria = mask_corpo.filter(ImageFilter.MaxFilter(sangria_px * 2 + 1))
+    # Suavização Gaussiana pesada para arredondar 'colinas' e pontas
+    mask_sangria = mask_sangria.filter(ImageFilter.GaussianBlur(radius=6))
+    # Binarização para deixar a borda nítida para o scanner
+    mask_sangria = mask_sangria.point(lambda p: 255 if p > 120 else 0)
 
-    # 4. CRIAR A LINHA PRETA DO SCANNER
-    mask_linha = mask_final.filter(ImageFilter.MaxFilter(espessura_linha * 2 + 1))
+    # 4. CRIAR A LINHA PRETA EXTERNA
+    mask_linha = mask_sangria.filter(ImageFilter.MaxFilter(espessura_linha * 2 + 1))
     
-    # Montagem Final
-    peca = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    # Montagem final da peça
+    peca_final = Image.new("RGBA", img.size, (0, 0, 0, 0))
     preto = Image.new("RGBA", img.size, (0, 0, 0, 255))
     branco = Image.new("RGBA", img.size, (255, 255, 255, 255))
     
-    peca.paste(preto, (0, 0), mask_linha)   # Linha externa
-    peca.paste(branco, (0, 0), mask_final)  # Sangria branca sólida
-    peca.paste(img, (0, 0), img)            # Imagem original
+    # Ordem das camadas: Linha Preta -> Fundo Branco Sólido -> Desenho
+    peca_final.paste(preto, (0, 0), mask_linha)
+    peca_final.paste(branco, (0, 0), mask_sangria)
+    peca_final.paste(img, (0, 0), img)
     
-    return peca, mask_linha
+    return peca_final, mask_linha
 
-from PIL import ImageOps # Necessário para o Invert
-
-def montar_folha_final(lista_config, margem_mm, sangria_mm, espaco_mm, espessura_linha):
+def montar_folha_scanncut(lista_config, margem_mm, sangria_mm, espaco_mm, linha_px):
     canvas = Image.new('RGBA', (A4_WIDTH, A4_HEIGHT), (255, 255, 255, 255))
     mask_canvas = Image.new('L', (A4_WIDTH, A4_HEIGHT), 0)
     margem_px = int(margem_mm * MM_TO_PX)
@@ -61,25 +63,33 @@ def montar_folha_final(lista_config, margem_mm, sangria_mm, espaco_mm, espessura
         ratio = w_px / img_orig.size[0]
         img_res = img_orig.resize((w_px, int(img_orig.size[1] * ratio)), Image.LANCZOS)
         
+        # Crop para remover sobras de transparência
         bbox = img_res.getbbox()
         if bbox: img_res = img_res.crop(bbox)
             
-        img_com_contorno, mask_c = gerar_contorno_profissional(img_res, sangria_mm, espessura_linha)
+        img_contornada, mask_colisao = gerar_contorno_perfeito(img_res, sangria_mm, linha_px)
         
-        m_colisao = mask_c.filter(ImageFilter.MaxFilter(espaco_px * 2 + 1)) if espaco_px > 0 else mask_c
-        processed.append({'img': img_com_contorno, 'mask': m_colisao})
+        # Máscara de colisão com folga extra para o 'Tetris'
+        if espaco_px > 0:
+            m_c = mask_colisao.filter(ImageFilter.MaxFilter(espaco_px * 2 + 1))
+        else:
+            m_c = mask_colisao
+            
+        processed.append({'img': img_contornada, 'mask': m_c})
 
+    # Maiores primeiro para otimizar os vãos
     processed.sort(key=lambda x: x['img'].size[1], reverse=True)
 
     for p in processed:
         img, m = p['img'], p['mask']
         iw, ih = img.size
         sucesso = False
-        for _ in range(5000): 
+        for _ in range(5000): # Alta insistência para encaixe aleatório
             tx = random.randint(margem_px, A4_WIDTH - iw - margem_px)
             ty = random.randint(margem_px, A4_HEIGHT - ih - margem_px)
-            pedaco = mask_canvas.crop((tx, ty, tx + iw, ty + ih))
-            if not ImageChops.multiply(pedaco, m).getbbox():
+            
+            check_area = mask_canvas.crop((tx, ty, tx + iw, ty + ih))
+            if not ImageChops.multiply(check_area, m).getbbox():
                 canvas.paste(img, (tx, ty), img)
                 mask_canvas.paste(m, (tx, ty), m)
                 sucesso = True
@@ -88,14 +98,15 @@ def montar_folha_final(lista_config, margem_mm, sangria_mm, espaco_mm, espessura
 
 # --- INTERFACE ---
 st.set_page_config(page_title="ScanNCut Final Pro", layout="wide")
-st.title("✂️ ScanNCut: Contorno Sólido e Suave")
+st.title("🎯 ScanNCut: Contorno Sólido e Curvas Lisas")
 
-sangria = st.sidebar.number_input("Sangria (mm)", 0.5, 10.0, 3.0, 0.5)
-espaco = st.sidebar.number_input("Espaço entre Peças (mm)", 0.0, 10.0, 1.0, 0.5)
-linha = st.sidebar.slider("Linha do Scanner (px)", 1, 5, 2)
-margem = st.sidebar.slider("Margem Folha (mm)", 5, 30, 10)
+st.sidebar.header("Configurações de Corte")
+sangria_val = st.sidebar.number_input("Tamanho da Sangria Branca (mm)", 1.0, 10.0, 3.0, 0.5)
+espaco_val = st.sidebar.number_input("Distância entre Peças (mm)", 0.0, 10.0, 1.0, 0.5)
+linha_val = st.sidebar.slider("Espessura da Linha do Scanner (px)", 1, 5, 2)
+margem_val = st.sidebar.slider("Margem da Folha (mm)", 5, 30, 10)
 
-arquivos = st.file_uploader("Suba seus PNGs", type=['png'], accept_multiple_files=True)
+arquivos = st.file_uploader("Upload PNGs", type=['png'], accept_multiple_files=True)
 
 if arquivos:
     config_list = []
@@ -104,13 +115,14 @@ if arquivos:
         with cols[i % 4]:
             img = Image.open(arq)
             st.image(img, use_container_width=True)
-            w = st.number_input(f"Largura (mm):", 10, 250, 80, key=f"w_{i}")
-            config_list.append({'img': img, 'width_mm': w})
+            w_mm = st.number_input(f"Largura (mm):", 10, 250, 80, key=f"w_{i}")
+            config_list.append({'img': img, 'width_mm': w_mm})
 
-    if st.button("🚀 GERAR FOLHA PERFEITA"):
-        with st.spinner('Limpando vãos e suavizando curvas...'):
-            folha = montar_folha_final(config_list, margem, sangria, espaco, linha)
+    if st.button("🚀 GERAR FOLHA PROFISSIONAL"):
+        with st.spinner('Processando silhuetas e fechando buracos...'):
+            folha = montar_folha_scanncut(config_list, margem_val, sangria_val, espaco_val, linha_val)
             st.image(folha, use_container_width=True)
+            
             buf = io.BytesIO()
             folha.convert("RGB").save(buf, format="PDF", resolution=300.0)
-            st.download_button("📥 Baixar PDF", buf.getvalue(), "folha_final.pdf")
+            st.download_button("📥 Baixar PDF", buf.getvalue(), "folha_scanncut_perfeita.pdf")
