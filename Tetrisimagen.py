@@ -1,61 +1,75 @@
 import streamlit as st
 from PIL import Image
-import math
+import io
 
-def layout_images(images, canvas_size=(2480, 3508), margin=40, spacing=20):
-    """
-    canvas_size: A4 em 300 DPI é aprox 2480x3508 pixels
-    """
-    canvas = Image.new('RGBA', canvas_size, (255, 255, 255, 255))
-    curr_x, curr_y = margin, margin
-    max_row_height = 0
+# Configuração da Folha A4 em 300 DPI
+A4_WIDTH = 2480
+A4_HEIGHT = 3508
+
+def montar_folha(images, margin, spacing):
+    # Cria o fundo branco
+    canvas = Image.new('RGBA', (A4_WIDTH, A4_HEIGHT), (255, 255, 255, 255))
+    
+    # Ordena imagens da maior para a menor (melhora o encaixe)
+    images.sort(key=lambda x: x.size[1], reverse=True)
+    
+    x, y = margin, margin
+    row_height = 0
     
     for img in images:
-        # Redimensiona se a imagem for maior que a folha
-        img.thumbnail((canvas_size[0] - 2*margin, canvas_size[1] - 2*margin))
         w, h = img.size
         
-        # Verifica se precisa pular de linha
-        if curr_x + w > canvas_size[0] - margin:
-            curr_x = margin
-            curr_y += max_row_height + spacing
-            max_row_height = 0
-            
-        # Verifica se cabe na folha (altura)
-        if curr_y + h > canvas_size[1] - margin:
-            st.warning("Algumas imagens não couberam nesta folha!")
+        # Se a imagem for maior que a largura da folha, redimensiona
+        if w > (A4_WIDTH - 2*margin):
+            ratio = (A4_WIDTH - 2*margin) / w
+            img = img.resize((int(w*ratio), int(h*ratio)), Image.LANCZOS)
+            w, h = img.size
+
+        # Verifica se precisa ir para a próxima linha
+        if x + w > A4_WIDTH - margin:
+            x = margin
+            y += row_height + spacing
+            row_height = 0
+
+        # Se ultrapassar a altura da folha, para de adicionar
+        if y + h > A4_HEIGHT - margin:
+            st.error("Ops! Nem tudo coube em uma folha só.")
             break
-            
-        # Cola a imagem no canvas
-        canvas.paste(img, (curr_x, curr_y), img)
+
+        # Cola a imagem (usa o próprio canal alpha como máscara para transparência)
+        canvas.paste(img, (x, y), img)
         
-        curr_x += w + spacing
-        max_row_height = max(max_row_height, h)
+        x += w + spacing
+        row_height = max(row_height, h)
         
     return canvas
 
-st.title("🚀 Organizador de Topo de Bolo - A4")
-st.write("Suba seus PNGs transparentes e eu monto a folha para você!")
+st.set_page_config(page_title="Tetris de Imagens A4", layout="wide")
+st.title("🍓 Organizador de Topo de Bolo (ScanNCut)")
 
-uploaded_files = st.file_uploader("Escolha as artes (PNG)", accept_multiple_files=True, type=['png'])
+# Upload
+arquivos = st.file_uploader("Suba seus PNGs transparentes aqui", type=['png'], accept_multiple_files=True)
 
-if uploaded_files:
-    images = [Image.open(file) for file in uploaded_files]
+if arquivos:
+    # Sliders para você ajustar ao vivo
+    margem = st.sidebar.slider("Margem da folha (px)", 0, 200, 50)
+    espaco = st.sidebar.slider("Espaço entre itens (px)", 0, 100, 20)
     
-    # Opções de ajuste
-    col1, col2 = st.columns(2)
-    with col1:
-        margin = st.slider("Margem da folha (segurança ScanNCut)", 0, 100, 40)
-    with col2:
-        spacing = st.slider("Espaço entre tags", 0, 50, 20)
-
-    if st.button("Gerar Folha A4"):
-        result_img = layout_images(images, margin=margin, spacing=spacing)
-        st.image(result_img, caption="Prévia da Folha", use_column_width=True)
+    imgs = [Image.open(arq) for arq in arquivos]
+    
+    if st.button("Gerar Montagem Automática"):
+        folha_pronta = montar_folha(imgs, margem, espaco)
         
-        # Converter para PDF para download
-        pdf_path = "folha_impressao.pdf"
-        result_img.convert("RGB").save(pdf_path, "PDF", resolution=300.0)
+        # Exibe na tela
+        st.image(folha_pronta, caption="Sua folha organizada", use_container_width=True)
         
-        with open(pdf_path, "rb") as f:
-            st.download_button("Baixar PDF para Impressão", f, file_name="topo_de_bolo_pronto.pdf")
+        # Prepara o PDF
+        pdf_buffer = io.BytesIO()
+        folha_pronta.convert("RGB").save(pdf_buffer, format="PDF", resolution=300.0)
+        
+        st.download_button(
+            label="📥 Baixar PDF para Impressão",
+            data=pdf_buffer.getvalue(),
+            file_name="folha_pronta_impressao.pdf",
+            mime="application/pdf"
+        )
