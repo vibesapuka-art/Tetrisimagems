@@ -9,68 +9,65 @@ A4_HEIGHT = 3508
 MM_TO_PX = 11.81
 
 def tornar_impar(n):
-    """Garante que o número seja ímpar para os filtros do Pillow"""
     n = int(n)
-    if n <= 0: return 1
+    if n < 1: return 1
     return n if n % 2 != 0 else n + 1
 
 def gerar_contorno_custom(img, sangria_mm, suavidade, linha_ativa, espessura_linha):
-    """Gera contorno com níveis de suavidade e opção de linha liga/desliga"""
-    # 1. Preparar Máscara Base
-    alpha = img.split()[3].point(lambda p: 255 if p > 100 else 0)
+    # --- NOVO: Adicionar margem de respiro para o contorno não cortar ---
+    # Criamos uma tela maior que a imagem original para dar espaço à bolha
+    respiro = int(sangria_mm * MM_TO_PX * 2) + 50 
+    img_expandida = Image.new("RGBA", (img.width + respiro, img.height + respiro), (0, 0, 0, 0))
+    img_expandida.paste(img, (respiro // 2, respiro // 2))
     
-    # 2. Definir intensidades de união e arredondamento
+    # Trabalhamos agora com a imagem expandida
+    alpha = img_expandida.split()[3].point(lambda p: 255 if p > 100 else 0)
+    
     if suavidade == "Baixa":
-        raio_blur = 2
-        expansao_uniao = 3
+        raio_blur, expansao_uniao = 2, 5
     elif suavidade == "Média":
-        raio_blur = 7
-        expansao_uniao = 17
+        raio_blur, expansao_uniao = 8, 25
     else: # Alta
-        raio_blur = 15
-        expansao_uniao = 41
+        raio_blur, expansao_uniao = 20, 61 
 
-    # 3. Unificar Silhueta (Fecha vãos internos como o do rabo)
-    mask_base = alpha.filter(ImageFilter.MaxFilter(size=tornar_impar(expansao_uniao)))
+    # 1. Unificar Silhueta
+    mask_unida = alpha.filter(ImageFilter.MaxFilter(size=tornar_impar(expansao_uniao)))
     
-    # Preenchimento total interno (Flood Fill)
-    bg = Image.new("L", (mask_base.width + 2, mask_base.height + 2), 0)
-    bg.paste(mask_base, (1, 1))
-    ImageDraw.floodfill(bg, (0, 0), 255)
-    mask_solida = ImageOps.invert(bg.crop((1, 1, mask_base.width + 1, mask_base.height + 1)))
-    mask_corpo = ImageChops.lighter(mask_base, mask_solida)
+    # 2. Preenchimento Total (Bolha Sólida)
+    canvas_fill = Image.new("L", (mask_unida.width + 2, mask_unida.height + 2), 0)
+    canvas_fill.paste(mask_unida, (1, 1))
+    ImageDraw.floodfill(canvas_fill, (0, 0), 255)
+    mask_solida = ImageOps.invert(canvas_fill.crop((1, 1, mask_unida.width + 1, mask_unida.height + 1)))
+    mask_bolha = ImageChops.lighter(mask_unida, mask_solida)
     
-    # 4. Criar Sangria (Borda Branca)
+    # 3. Sangria e Arredondamento
     sangria_px = int(sangria_mm * MM_TO_PX)
-    if sangria_px > 0:
-        mask_sangria = mask_corpo.filter(ImageFilter.MaxFilter(size=tornar_impar(sangria_px)))
-    else:
-        mask_sangria = mask_corpo
+    mask_final = mask_bolha.filter(ImageFilter.MaxFilter(size=tornar_impar(sangria_px))) if sangria_px > 0 else mask_bolha
+    mask_final = mask_final.filter(ImageFilter.GaussianBlur(radius=raio_blur))
+    mask_final = mask_final.point(lambda p: 255 if p > 120 else 0)
 
-    # 5. Aplicar Suavidade (Arredondamento das Colinas)
-    if raio_blur > 0:
-        mask_sangria = mask_sangria.filter(ImageFilter.GaussianBlur(radius=raio_blur))
-        mask_sangria = mask_sangria.point(lambda p: 255 if p > 128 else 0)
-
-    # 6. Montagem Final
-    nova_img = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    branco = Image.new("RGBA", img.size, (255, 255, 255, 255))
+    # 4. Montagem Final
+    nova_img = Image.new("RGBA", img_expandida.size, (0, 0, 0, 0))
+    branco = Image.new("RGBA", img_expandida.size, (255, 255, 255, 255))
     
     if linha_ativa:
-        # Linha preta para o scanner
-        mask_linha = mask_sangria.filter(ImageFilter.MaxFilter(size=tornar_impar(espessura_linha * 2)))
-        preto = Image.new("RGBA", img.size, (0, 0, 0, 255))
+        mask_linha = mask_final.filter(ImageFilter.MaxFilter(size=tornar_impar(espessura_linha * 2)))
+        preto = Image.new("RGBA", img_expandida.size, (0, 0, 0, 255))
         nova_img.paste(preto, (0, 0), mask_linha)
-        mask_final_colisao = mask_linha
+        mask_colisao = mask_linha
     else:
-        mask_final_colisao = mask_sangria
+        mask_colisao = mask_final
 
-    nova_img.paste(branco, (0, 0), mask_sangria)
-    nova_img.paste(img, (0, 0), img)
+    nova_img.paste(branco, (0, 0), mask_final)
+    nova_img.paste(img_expandida, (0, 0), img_expandida)
     
-    return nova_img, mask_final_colisao
+    # Cortar o excesso de transparência inútil para economizar espaço no PDF
+    bbox = nova_img.getbbox()
+    if bbox:
+        return nova_img.crop(bbox), mask_colisao.crop(bbox)
+    return nova_img, mask_colisao
 
-def montar_folha(lista_config, margem_mm, sangria_mm, espaco_mm, suavidade, linha_ativa, linha_px):
+def montar_folha_pro(lista_config, margem_mm, sangria_mm, espaco_mm, suavidade, linha_ativa, linha_px):
     canvas = Image.new('RGBA', (A4_WIDTH, A4_HEIGHT), (255, 255, 255, 255))
     mask_canvas = Image.new('L', (A4_WIDTH, A4_HEIGHT), 0)
     margem_px = int(margem_mm * MM_TO_PX)
@@ -78,22 +75,16 @@ def montar_folha(lista_config, margem_mm, sangria_mm, espaco_mm, suavidade, linh
     
     processed = []
     for item in lista_config:
-        img_temp = item['img'].convert("RGBA")
+        img_raw = item['img'].convert("RGBA")
         w_px = int(item['width_mm'] * MM_TO_PX)
-        ratio = w_px / img_temp.size[0]
-        img_res = img_temp.resize((w_px, int(img_temp.size[1] * ratio)), Image.LANCZOS)
+        ratio = w_px / img_raw.size[0]
+        img_res = img_raw.resize((w_px, int(img_raw.size[1] * ratio)), Image.LANCZOS)
         
-        bbox = img_res.getbbox()
-        if bbox: img_res = img_res.crop(bbox)
-            
-        peca, m_c = gerar_contorno_custom(img_res, sangria_mm, suavidade, linha_ativa, linha_px)
-        
-        # Máscara de colisão para o encaixe automático
-        m_col = m_c.filter(ImageFilter.MaxFilter(size=tornar_impar(espaco_px))) if espaco_px > 0 else m_c
+        peca, mask_c = gerar_contorno_custom(img_res, sangria_mm, suavidade, linha_ativa, linha_px)
+        m_col = mask_c.filter(ImageFilter.MaxFilter(size=tornar_impar(espaco_px))) if espaco_px > 0 else mask_c
         processed.append({'img': peca, 'mask': m_col})
 
     processed.sort(key=lambda x: x['img'].size[1], reverse=True)
-    
     for p in processed:
         img, m = p['img'], p['mask']
         iw, ih = img.size
@@ -106,42 +97,36 @@ def montar_folha(lista_config, margem_mm, sangria_mm, espaco_mm, suavidade, linh
                 break
     return canvas
 
-# --- INTERFACE ---
+# Interface
 st.set_page_config(page_title="ScanNCut Studio Pro", layout="wide")
-
 with st.sidebar:
     st.header("🎨 Estilo do Contorno")
-    sangria_mm = st.slider("Tamanho da Sangria (mm)", 0.0, 15.0, 3.0)
-    suavidade = st.select_slider("Suavidade do Contorno", options=["Baixa", "Média", "Alta"], value="Média")
-    
+    sangria = st.slider("Sangria Branca (mm)", 0.0, 15.0, 4.0)
+    suavizar = st.select_slider("Suavidade (Efeito Bolha)", options=["Baixa", "Média", "Alta"], value="Alta")
     st.header("🛠️ Opções de Linha")
-    linha_ativa = st.toggle("Ativar Linha Preta (Scanner)", value=True)
-    linha_px = st.slider("Espessura da Linha (px)", 1, 5, 2)
-    
+    com_linha = st.toggle("Ativar Linha de Corte Preta", value=True)
+    espessura = st.slider("Espessura da Linha (px)", 1, 5, 2)
     st.header("📏 Layout")
-    espaco_mm = st.slider("Espaço entre peças (mm)", 0.0, 10.0, 1.0)
-    margem_folha = st.slider("Margem da folha (mm)", 5, 20, 10)
+    distancia = st.slider("Espaço entre peças (mm)", 0.0, 10.0, 1.5)
+    margem = st.slider("Margem da folha (mm)", 5, 20, 10)
 
-st.title("✂️ Organizador de Topos Profissional")
+st.title("✂️ Organizador de Topos: Corrigido Limite de Borda")
+uploads = st.file_uploader("Suba seus personagens PNG", type=['png'], accept_multiple_files=True)
 
-arquivos = st.file_uploader("Suba seus PNGs", type=['png'], accept_multiple_files=True)
-
-if arquivos:
+if uploads:
     config_list = []
-    # Mostra as imagens bem pequenas em colunas
-    cols = st.columns(6) 
-    for i, arq in enumerate(arquivos):
+    cols = st.columns(6)
+    for i, arq in enumerate(uploads):
         with cols[i % 6]:
             img_aberta = Image.open(arq)
-            st.image(img_aberta, width=70) # Tamanho reduzido no visor
-            larg = st.number_input(f"L(mm)", 10, 300, 70, key=f"w_{i}")
+            st.image(img_aberta, width=80) 
+            larg = st.number_input(f"L (mm)", 10, 300, 70, key=f"w_{i}")
             config_list.append({'img': img_aberta, 'width_mm': larg})
 
-    if st.button("🚀 GERAR FOLHA"):
-        with st.spinner('Processando contornos...'):
-            folha_final = montar_folha(config_list, margem_folha, sangria_mm, espaco_mm, suavidade, linha_ativa, linha_px)
-            st.image(folha_final, use_container_width=True)
-            
+    if st.button("🚀 GERAR MONTAGEM"):
+        with st.spinner('Processando com margens de segurança...'):
+            folha = montar_folha_pro(config_list, margem, sangria, distancia, suavizar, com_linha, espessura)
+            st.image(folha, use_container_width=True)
             buf = io.BytesIO()
-            folha_final.convert("RGB").save(buf, format="PDF", resolution=300.0)
-            st.download_button("📥 Baixar PDF", buf.getvalue(), "folha_organizada.pdf")
+            folha.convert("RGB").save(buf, format="PDF", resolution=300.0)
+            st.download_button("📥 Baixar PDF Corrigido", buf.getvalue(), "folha_bolha_final.pdf")
