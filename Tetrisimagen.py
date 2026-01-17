@@ -2,32 +2,33 @@ import streamlit as st
 from PIL import Image
 import io
 
-# Configuração da Folha A4 em 300 DPI (padrão de impressão)
+# Configuração da Folha A4 em 300 DPI
 A4_WIDTH = 2480
 A4_HEIGHT = 3508
+MM_TO_PX = 11.81  # Conversão aproximada para 300 DPI
 
-def montar_folha(images, margin, spacing, target_width_mm):
-    # Converte mm para pixels (1mm aprox 11.81 pixels em 300 DPI)
-    target_width_px = int(target_width_mm * 11.81)
-    
+def montar_folha(lista_imagens_config, margin, spacing):
     canvas = Image.new('RGBA', (A4_WIDTH, A4_HEIGHT), (255, 255, 255, 255))
     
-    # Redimensiona e organiza
     processed_images = []
-    for img in images:
-        # Redimensiona mantendo o aspecto original
+    for item in lista_imagens_config:
+        img = item['img']
+        target_w_mm = item['width_mm']
+        
+        # Redimensiona a imagem individualmente
+        target_w_px = int(target_w_mm * MM_TO_PX)
         w_orig, h_orig = img.size
-        ratio = target_width_px / w_orig
-        new_size = (target_width_px, int(h_orig * ratio))
+        ratio = target_w_px / w_orig
+        new_size = (target_w_px, int(h_orig * ratio))
         img_resized = img.resize(new_size, Image.LANCZOS)
         
-        # Se a imagem for mais alta que larga, tenta girar 90º para caber melhor na linha
-        if img_resized.size[1] > img_resized.size[0] * 1.5:
+        # Rotação automática para economia de espaço
+        if img_resized.size[1] > img_resized.size[0] * 1.2:
             img_resized = img_resized.rotate(90, expand=True)
             
         processed_images.append(img_resized)
 
-    # Ordena da maior para a menor altura para um encaixe mais limpo
+    # Ordena para melhor encaixe
     processed_images.sort(key=lambda x: x.size[1], reverse=True)
     
     x, y = margin, margin
@@ -35,51 +36,47 @@ def montar_folha(images, margin, spacing, target_width_mm):
     
     for img in processed_images:
         w, h = img.size
-        
-        # Checa se precisa pular linha
         if x + w > A4_WIDTH - margin:
             x = margin
             y += row_height + spacing
             row_height = 0
-
-        # Checa se cabe na folha atual
         if y + h > A4_HEIGHT - margin:
-            st.warning("Atenção: Algumas imagens ficaram de fora. Diminua o tamanho ou use menos imagens.")
+            st.warning("Algumas imagens não couberam!")
             break
-
         canvas.paste(img, (x, y), img)
         x += w + spacing
         row_height = max(row_height, h)
         
     return canvas
 
-st.set_page_config(page_title="Tetris de Imagens A4", layout="wide")
-st.title("🍓 Organizador de Topo de Bolo V2")
+st.set_page_config(page_title="Organizador Pro - Topo de Bolo", layout="wide")
+st.title("🎨 Organizador Personalizado (Tamanhos Individuais)")
 
-# Painel Lateral de Controles
-st.sidebar.header("Configurações")
-largura_tag = st.sidebar.number_input("Largura desejada da tag (em mm)", min_value=10, max_value=200, value=50)
+st.sidebar.header("Ajustes da Folha")
 margem = st.sidebar.slider("Margem da folha (px)", 0, 200, 60)
 espaco = st.sidebar.slider("Espaço entre itens (px)", 0, 100, 30)
 
-arquivos = st.file_uploader("Suba seus PNGs (Dragon Ball, Moranguinho, etc)", type=['png'], accept_multiple_files=True)
+arquivos = st.file_uploader("Suba seus PNGs", type=['png'], accept_multiple_files=True)
 
 if arquivos:
-    imgs = [Image.open(arq) for arq in arquivos]
+    lista_config = []
+    st.subheader("Configurar Tamanhos (Largura em mm)")
     
-    if st.button("Gerar Montagem"):
-        with st.spinner('Organizando peças...'):
-            folha_pronta = montar_folha(imgs, margem, espaco, largura_tag)
+    # Cria colunas para organizar os campos de entrada de tamanho
+    cols = st.columns(3)
+    for i, arq in enumerate(arquivos):
+        with cols[i % 3]:
+            img = Image.open(arq)
+            st.image(img, width=100)
+            # Campo de entrada para cada imagem
+            largura = st.number_input(f"Largura {arq.name}", min_value=10, max_value=200, value=50, key=f"w_{i}")
+            lista_config.append({'img': img, 'width_mm': largura})
+    
+    if st.button("🚀 Gerar Montagem Perfeita"):
+        with st.spinner('Calculando melhor encaixe...'):
+            folha = montar_folha(lista_config, margem, espaco)
+            st.image(folha, caption="Folha Finalizada", use_container_width=True)
             
-            st.image(folha_pronta, caption="Prévia para Impressão", use_container_width=True)
-            
-            # Gerar PDF
             pdf_buffer = io.BytesIO()
-            folha_pronta.convert("RGB").save(pdf_buffer, format="PDF", resolution=300.0)
-            
-            st.download_button(
-                label="📥 Baixar PDF Pronto",
-                data=pdf_buffer.getvalue(),
-                file_name="topo_organizado.pdf",
-                mime="application/pdf"
-            )
+            folha.convert("RGB").save(pdf_buffer, format="PDF", resolution=300.0)
+            st.download_button("📥 Baixar PDF", data=pdf_buffer.getvalue(), file_name="topo_custom.pdf")
