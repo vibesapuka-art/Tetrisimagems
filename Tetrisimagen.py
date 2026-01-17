@@ -3,52 +3,57 @@ from PIL import Image, ImageChops, ImageFilter, ImageDraw, ImageOps
 import io
 import random
 
-# Configuração da Folha A4 em 300 DPI
+# Configuração A4 300 DPI
 A4_WIDTH = 2480
 A4_HEIGHT = 3508
 MM_TO_PX = 11.81
 
-def gerar_contorno_bolha_limpa(img, sangria_mm, espessura_linha):
-    """Cria uma bolha sólida, remove sujeiras e bolinhas internas"""
+def gerar_contorno_custom(img, sangria_mm, suavidade, linha_ativa, espessura_linha):
+    """Gera contorno com níveis de suavidade e opção de linha liga/desliga"""
     sangria_px = int(sangria_mm * MM_TO_PX)
-    
-    # 1. Criar máscara binária e remover ruídos pequenos (bolinhas)
     alpha = img.split()[3].point(lambda p: 255 if p > 100 else 0)
-    # Filtro para eliminar pixels isolados (sujeira)
-    alpha = alpha.filter(ImageFilter.MedianFilter(size=7))
     
-    # 2. UNIFICAR SILHUETA (Fechar vãos entre rabo e pernas)
-    # Usamos uma expansão para 'colar' as partes próximas
-    mask_unificada = alpha.filter(ImageFilter.MaxFilter(21))
-    
-    # 3. PREENCHIMENTO TOTAL (Flood Fill)
-    # Garante que o interior seja uma massa branca única
-    bg = Image.new("L", (mask_unificada.width + 2, mask_unificada.height + 2), 0)
-    bg.paste(mask_unificada, (1, 1))
-    ImageDraw.floodfill(bg, (0, 0), 255)
-    mask_solida = ImageOps.invert(bg.crop((1, 1, mask_unificada.width + 1, mask_unificada.height + 1)))
-    
-    # 4. SUAVIZAÇÃO E SANGRIA (Estilo Natal)
-    mask_final = mask_solida.filter(ImageFilter.MaxFilter(sangria_px))
-    # Desfoque alto para arredondar tudo
-    mask_final = mask_final.filter(ImageFilter.GaussianBlur(radius=10))
-    mask_final = mask_final.point(lambda p: 255 if p > 128 else 0)
+    # Ajuste de níveis
+    if suavidade == "Baixa":
+        raio_blur = 3
+        expansao_uniao = 5
+    elif suavidade == "Média":
+        raio_blur = 8
+        expansao_uniao = 15
+    else: # Alta
+        raio_blur = 15
+        expansao_uniao = 30
 
-    # 5. LINHA PRETA DE CORTE EXTERNA
-    mask_linha = mask_final.filter(ImageFilter.MaxFilter(espessura_linha * 2 + 1))
+    # 1. Unificar silhueta e fechar buracos
+    mask_base = alpha.filter(ImageFilter.MaxFilter(expansao_uniao))
+    bg = Image.new("L", (mask_base.width + 2, mask_base.height + 2), 0)
+    bg.paste(mask_base, (1, 1))
+    ImageDraw.floodfill(bg, (0, 0), 255)
+    mask_solida = ImageOps.invert(bg.crop((1, 1, mask_base.width + 1, mask_base.height + 1)))
     
-    # Montagem
-    peca = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    preto = Image.new("RGBA", img.size, (0, 0, 0, 255))
+    # 2. Criar Sangria e Suavizar
+    mask_sangria = mask_solida.filter(ImageFilter.MaxFilter(sangria_px))
+    mask_sangria = mask_sangria.filter(ImageFilter.GaussianBlur(radius=raio_blur))
+    mask_sangria = mask_sangria.point(lambda p: 255 if p > 128 else 0)
+
+    # 3. Montagem
+    nova_img = Image.new("RGBA", img.size, (0, 0, 0, 0))
     branco = Image.new("RGBA", img.size, (255, 255, 255, 255))
     
-    peca.paste(preto, (0, 0), mask_linha)
-    peca.paste(branco, (0, 0), mask_final)
-    peca.paste(img, (0, 0), img)
-    
-    return peca, mask_linha
+    if linha_ativa:
+        mask_linha = mask_sangria.filter(ImageFilter.MaxFilter(espessura_linha * 2 + 1))
+        preto = Image.new("RGBA", img.size, (0, 0, 0, 255))
+        nova_img.paste(preto, (0, 0), mask_linha)
+        mask_final_colisao = mask_linha
+    else:
+        mask_final_colisao = mask_sangria
 
-def montar_folha_scanncut(lista_config, margem_mm, sangria_mm, espaco_mm, linha_px):
+    nova_img.paste(branco, (0, 0), mask_sangria)
+    nova_img.paste(img, (0, 0), img)
+    
+    return nova_img, mask_final_colisao
+
+def montar_folha(lista_config, margem_mm, sangria_mm, espaco_mm, suavidade, linha_ativa, linha_px):
     canvas = Image.new('RGBA', (A4_WIDTH, A4_HEIGHT), (255, 255, 255, 255))
     mask_canvas = Image.new('L', (A4_WIDTH, A4_HEIGHT), 0)
     margem_px = int(margem_mm * MM_TO_PX)
@@ -56,25 +61,23 @@ def montar_folha_scanncut(lista_config, margem_mm, sangria_mm, espaco_mm, linha_
     
     processed = []
     for item in lista_config:
-        img_orig = item['img'].convert("RGBA")
+        img_res = item['img'].convert("RGBA")
         w_px = int(item['width_mm'] * MM_TO_PX)
-        ratio = w_px / img_orig.size[0]
-        img_res = img_orig.resize((w_px, int(img_orig.size[1] * ratio)), Image.LANCZOS)
+        ratio = w_px / img_res.size[0]
+        img_res = img_res.resize((w_px, int(img_res.size[1] * ratio)), Image.LANCZOS)
         
         bbox = img_res.getbbox()
         if bbox: img_res = img_res.crop(bbox)
             
-        img_c, mask_c = gerar_contorno_bolha_limpa(img_res, sangria_mm, linha_px)
-        
-        m_col = mask_c.filter(ImageFilter.MaxFilter(espaco_px * 2 + 1)) if espaco_px > 0 else mask_c
-        processed.append({'img': img_c, 'mask': m_col})
+        peca, m_c = gerar_contorno_custom(img_res, sangria_mm, suavidade, linha_ativa, linha_px)
+        m_col = m_c.filter(ImageFilter.MaxFilter(espaco_px * 2 + 1)) if espaco_px > 0 else m_c
+        processed.append({'img': peca, 'mask': m_col})
 
     processed.sort(key=lambda x: x['img'].size[1], reverse=True)
-
     for p in processed:
         img, m = p['img'], p['mask']
         iw, ih = img.size
-        for _ in range(5000): 
+        for _ in range(3000): 
             tx = random.randint(margem_px, A4_WIDTH - iw - margem_px)
             ty = random.randint(margem_px, A4_HEIGHT - ih - margem_px)
             if not ImageChops.multiply(mask_canvas.crop((tx, ty, tx + iw, ty + ih)), m).getbbox():
@@ -84,29 +87,40 @@ def montar_folha_scanncut(lista_config, margem_mm, sangria_mm, espaco_mm, linha_
     return canvas
 
 # Interface
-st.set_page_config(page_title="ScanNCut Bubble Clean", layout="wide")
-st.title("✂️ Modo Bolha Limpa (Sem Ruídos)")
+st.set_page_config(page_title="ScanNCut Studio", layout="wide")
+st.title("✂️ Organizador de Topos Profissional")
 
-sangria = st.sidebar.slider("Tamanho da Sangria (mm)", 1.0, 15.0, 4.5)
-espaco = st.sidebar.slider("Espaço entre Peças (mm)", 0.0, 10.0, 1.5)
-linha = st.sidebar.slider("Linha do Scanner (px)", 1, 5, 2)
+# Sidebar organizada
+st.sidebar.header("🎨 Estilo do Contorno")
+sangria_mm = st.sidebar.slider("Tamanho da Sangria (mm)", 0.0, 15.0, 3.0)
+suavidade = st.sidebar.select_slider("Suavidade do Contorno", options=["Baixa", "Média", "Alta"], value="Média")
 
-arquivos = st.file_uploader("Upload PNGs", type=['png'], accept_multiple_files=True)
+st.sidebar.header("🛠️ Opções de Linha")
+linha_ativa = st.sidebar.checkbox("Ativar Contorno Preto (Scanner)", value=True)
+linha_px = st.sidebar.slider("Espessura da Linha (px)", 1, 5, 2)
+
+st.sidebar.header("📏 Layout")
+espaco_mm = st.sidebar.slider("Espaço entre peças (mm)", 0.0, 10.0, 1.0)
+margem_folha = st.sidebar.slider("Margem da folha (mm)", 5, 20, 10)
+
+arquivos = st.file_uploader("Suba seus personagens PNG", type=['png'], accept_multiple_files=True)
 
 if arquivos:
     config_list = []
-    cols = st.columns(4)
+    # Grid com imagens menores no visor
+    cols = st.columns(6) 
     for i, arq in enumerate(arquivos):
-        with cols[i % 4]:
+        with cols[i % 6]:
             img = Image.open(arq)
-            st.image(img, use_container_width=True)
-            w = st.number_input(f"Largura (mm):", 10, 250, 80, key=f"w_{i}")
+            # Preview pequeno para não poluir
+            st.image(img, width=100) 
+            w = st.number_input(f"L (mm)", 10, 250, 70, key=f"w_{i}")
             config_list.append({'img': img, 'width_mm': w})
 
-    if st.button("🚀 GERAR PDF SEM BURACOS"):
-        with st.spinner('Limpando ruídos e unificando contorno...'):
-            folha = montar_folha_scanncut(config_list, 10, sangria, espaco, linha)
+    if st.button("🚀 GERAR FOLHA"):
+        with st.spinner('Processando...'):
+            folha = montar_folha(config_list, margem_folha, sangria_mm, espaco_mm, suavidade, linha_ativa, linha_px)
             st.image(folha, use_container_width=True)
             buf = io.BytesIO()
             folha.convert("RGB").save(buf, format="PDF", resolution=300.0)
-            st.download_button("📥 Baixar PDF Limpo", buf.getvalue(), "folha_bolha_limpa.pdf")
+            st.download_button("📥 Baixar PDF", buf.getvalue(), "folha_topo.pdf")
