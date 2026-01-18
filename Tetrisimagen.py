@@ -6,20 +6,22 @@ import random
 # Configuração A4 300 DPI
 A4_WIDTH = 2480
 A4_HEIGHT = 3508
-MM_TO_PX = 11.81
+CM_TO_PX = 118.11  # Fator para 300 DPI (1 cm = 118.11 pixels)
 
-# ... (Funções tornar_impar e gerar_contorno_custom permanecem as mesmas das versões anteriores)
 def tornar_impar(n):
     n = int(n)
     if n < 1: return 1
     return n if n % 2 != 0 else n + 1
 
-def gerar_contorno_custom(img, sangria_mm, suavidade, linha_ativa, espessura_linha):
-    respiro = int(sangria_mm * MM_TO_PX * 2) + 80 
+def gerar_contorno_custom(img, sangria_cm, suavidade, linha_ativa, espessura_linha):
+    # Respiro proporcional ao tamanho em cm
+    respiro = int(sangria_cm * CM_TO_PX * 2) + 80 
     img_expandida = Image.new("RGBA", (img.width + respiro, img.height + respiro), (0, 0, 0, 0))
     img_expandida.paste(img, (respiro // 2, respiro // 2))
+    
     alpha = img_expandida.split()[3].point(lambda p: 255 if p > 100 else 0)
     
+    # Configuração de Intensidade do Blur/União
     if suavidade == "Baixa": raio_blur, expansao_uniao = 2, 5
     elif suavidade == "Média": raio_blur, expansao_uniao = 8, 25
     else: raio_blur, expansao_uniao = 20, 65 
@@ -31,37 +33,39 @@ def gerar_contorno_custom(img, sangria_mm, suavidade, linha_ativa, espessura_lin
     mask_solida = ImageOps.invert(canvas_fill.crop((1, 1, mask_unida.width + 1, mask_unida.height + 1)))
     mask_bolha = ImageChops.lighter(mask_unida, mask_solida)
     
-    sangria_px = int(sangria_mm * MM_TO_PX)
+    sangria_px = int(sangria_cm * CM_TO_PX)
     mask_final = mask_bolha.filter(ImageFilter.MaxFilter(size=tornar_impar(sangria_px))) if sangria_px > 0 else mask_bolha
     mask_final = mask_final.filter(ImageFilter.GaussianBlur(radius=raio_blur))
     mask_final = mask_final.point(lambda p: 255 if p > 120 else 0)
 
     nova_img = Image.new("RGBA", img_expandida.size, (0, 0, 0, 0))
     if linha_ativa:
-        mask_linha = mask_final.filter(ImageFilter.MaxFilter(size=tornar_impar(2 * 2)))
+        mask_linha = mask_final.filter(ImageFilter.MaxFilter(size=tornar_impar(espessura_linha * 2)))
         nova_img.paste((0,0,0,255), (0, 0), mask_linha)
     
     nova_img.paste((255,255,255,255), (0, 0), mask_final)
     nova_img.paste(img_expandida, (0, 0), img_expandida)
+    
     bbox = nova_img.getbbox()
     return (nova_img.crop(bbox), mask_final.crop(bbox)) if bbox else (nova_img, mask_final)
 
-def montar_folha_pro(lista_config, margem_mm, sangria_mm, espaco_mm, suavidade, linha_ativa, modo_layout, permitir_90):
+def montar_folha_pro(lista_config, margem_cm, sangria_cm, espaco_cm, suavidade, linha_ativa, modo_layout, permitir_90):
     canvas = Image.new('RGBA', (A4_WIDTH, A4_HEIGHT), (255, 255, 255, 255))
     mask_canvas = Image.new('L', (A4_WIDTH, A4_HEIGHT), 0)
-    margem_px = int(margem_mm * MM_TO_PX)
-    espaco_px = int(espaco_mm * MM_TO_PX)
+    margem_px = int(margem_cm * CM_TO_PX)
+    espaco_px = int(espaco_cm * CM_TO_PX)
     
     all_pieces = []
     total_solicitado = 0
     for item in lista_config:
         img_raw = item['img'].convert("RGBA")
         if item['espelhar']: img_raw = ImageOps.mirror(img_raw)
-        w_px = int(item['width_mm'] * MM_TO_PX)
+        
+        w_px = int(item['width_cm'] * CM_TO_PX)
         ratio = w_px / img_raw.size[0]
         img_res = img_raw.resize((w_px, int(img_raw.size[1] * ratio)), Image.LANCZOS)
         
-        peca, mask_c = gerar_contorno_custom(img_res, sangria_mm, suavidade, linha_ativa, 2)
+        peca, mask_c = gerar_contorno_custom(img_res, sangria_cm, suavidade, linha_ativa, 2)
         peca_90 = peca.rotate(90, expand=True) if permitir_90 else None
         mask_90 = mask_c.rotate(90, expand=True) if permitir_90 else None
 
@@ -79,7 +83,7 @@ def montar_folha_pro(lista_config, margem_mm, sangria_mm, espaco_mm, suavidade, 
             if p['rot']: opcoes.append(p['rot'])
             for img_p, mask_p in opcoes:
                 iw, ih = img_p.size
-                for _ in range(2000): # Busca intensa
+                for _ in range(1500):
                     tx = random.randint(margem_px, A4_WIDTH - iw - margem_px)
                     ty = random.randint(margem_px, A4_HEIGHT - ih - margem_px)
                     if not ImageChops.multiply(mask_canvas.crop((tx, ty, tx + iw, ty + ih)), mask_p).getbbox():
@@ -108,22 +112,23 @@ def montar_folha_pro(lista_config, margem_mm, sangria_mm, espaco_mm, suavidade, 
     return canvas, total_solicitado, contador_sucesso
 
 # Interface Streamlit
-st.set_page_config(page_title="ScanNCut Pro Tracker", layout="wide")
+st.set_page_config(page_title="ScanNCut Pro Studio (cm)", layout="wide")
 
-# ... (Menu Lateral igual ao anterior)
 with st.sidebar:
-    st.header("⚙️ Configuração")
+    st.header("⚙️ Configurações (cm)")
     modo_layout = st.radio("Encaixe", ["Aleatório (Tetris)", "Linhas"])
     permitir_90 = st.checkbox("Girar 90° automático", value=True)
-    margem_folha = st.slider("Margem (mm)", 5, 20, 10)
-    espaco_entre = st.slider("Espaço (mm)", 0.0, 10.0, 1.5)
-    sangria = st.slider("Sangria (mm)", 0.0, 15.0, 4.0)
+    margem_folha = st.slider("Margem da folha (cm)", 0.5, 3.0, 1.0, 0.1)
+    espaco_entre = st.slider("Espaço entre peças (cm)", 0.0, 2.0, 0.2, 0.05)
+    
+    st.header("🎨 Estilo do Corte")
+    sangria = st.slider("Sangria Branca (cm)", 0.0, 2.0, 0.4, 0.1)
     suavidade_sel = st.select_slider("Suavidade", options=["Baixa", "Média", "Alta"], value="Alta")
-    linha_on = st.toggle("Linha de Corte", value=True)
+    linha_on = st.toggle("Linha de Corte Preta", value=True)
 
-st.title("✂️ ScanNCut Pro: Otimizador A4")
+st.title("✂️ ScanNCut Pro: Calibrado em Centímetros")
 
-uploads = st.file_uploader("Suba seus PNGs", type=['png'], accept_multiple_files=True)
+uploads = st.file_uploader("Suba seus arquivos PNG", type=['png'], accept_multiple_files=True)
 
 if uploads:
     config_list = []
@@ -131,37 +136,33 @@ if uploads:
     for i, arq in enumerate(uploads):
         with cols[i % 4]:
             img_aberta = Image.open(arq)
-            st.image(img_aberta, width=80) 
-            larg = st.number_input(f"Largura mm", 10, 300, 70, key=f"w_{i}")
-            qtd = st.number_input(f"Qtd", 1, 100, 1, key=f"q_{i}")
+            st.image(img_aberta, width=100) 
+            larg_cm = st.number_input(f"Largura (cm)", 1.0, 20.0, 7.0, 0.1, key=f"w_{i}")
+            qtd = st.number_input(f"Quantidade", 1, 100, 1, key=f"q_{i}")
             espelhar = st.checkbox(f"Espelhar", key=f"m_{i}")
-            config_list.append({'img': img_aberta, 'width_mm': larg, 'quantidade': qtd, 'espelhar': espelhar})
+            config_list.append({'img': img_aberta, 'width_cm': larg_cm, 'quantidade': qtd, 'espelhar': espelhar})
 
-    if st.button("🚀 GERAR E CALCULAR ESPAÇO"):
+    if st.button("🚀 GERAR FOLHA OTIMIZADA"):
         folha_final, total, sucesso = montar_folha_pro(config_list, margem_folha, sangria, espaco_entre, suavidade_sel, linha_on, modo_layout, permitir_90)
         
-        # EXIBIÇÃO DO CONTADOR
-        st.subheader("📊 Resumo da Folha")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Solicitadas", f"{total} un")
-        col2.metric("Encaixadas", f"{sucesso} un", delta=sucesso-total)
-        
-        aproveitamento = (sucesso/total)*100 if total > 0 else 0
-        col3.metric("Aproveitamento", f"{aproveitamento:.1f}%")
+        st.subheader("📊 Resumo da Produção")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Peças Solicitadas", f"{total}")
+        c2.metric("Peças Encaixadas", f"{sucesso}")
+        aprov = (sucesso/total)*100 if total > 0 else 0
+        c3.metric("Aproveitamento", f"{aprov:.1f}%")
 
         if sucesso < total:
-            st.warning(f"⚠️ Atenção: {total - sucesso} peça(s) não couberam nesta folha. Tente diminuir o tamanho ou a sangria.")
-        else:
-            st.success("✅ Tudo pronto! Todas as peças couberam perfeitamente.")
-
+            st.warning(f"⚠️ Faltaram {total - sucesso} peças por falta de espaço.")
+        
         st.image(folha_final, use_container_width=True)
         
-        # Botões de Download (PDF e PNG)
-        col_d1, col_d2 = st.columns(2)
+        col_pdf, col_png = st.columns(2)
+        # Download PDF
         buf_pdf = io.BytesIO()
         folha_final.convert("RGB").save(buf_pdf, format="PDF", resolution=300.0)
-        col_d1.download_button("📥 Baixar PDF", buf_pdf.getvalue(), "folha.pdf", use_container_width=True)
-        
+        col_pdf.download_button("📥 Baixar PDF (Imprimir)", buf_pdf.getvalue(), "folha_scanncut.pdf", use_container_width=True)
+        # Download PNG
         buf_png = io.BytesIO()
         folha_final.save(buf_png, format="PNG")
-        col_d2.download_button("🖼️ Baixar PNG", buf_png.getvalue(), "folha.png", use_container_width=True)
+        col_png.download_button("🖼️ Baixar PNG (Edição)", buf_png.getvalue(), "folha_scanncut.png", use_container_width=True)
