@@ -46,10 +46,9 @@ def criar_nova_folha():
 
 def montar_multiplas_folhas_inteligente(lista_config, margem_cm, sangria_cm, linha_ativa, permitir_90):
     m_px = int(margem_cm * CM_TO_PX)
-    e_px = int(0.15 * CM_TO_PX) # Espaço fixo pequeno entre peças
+    e_px = int(0.15 * CM_TO_PX) 
     all_pieces = []
     
-    # Identifica se é imagem única ou várias
     e_imagem_unica = len(lista_config) == 1
 
     for item in lista_config:
@@ -58,11 +57,27 @@ def montar_multiplas_folhas_inteligente(lista_config, margem_cm, sangria_cm, lin
         w_px = int(item['width_cm'] * CM_TO_PX)
         img = img.resize((w_px, int(img.size[1] * (w_px/img.size[0]))), Image.Resampling.LANCZOS)
         peca, m_c = gerar_contorno_fast(img, sangria_cm, linha_ativa)
-        p_90, m_90 = (peca.rotate(90, expand=True), m_c.rotate(90, expand=True)) if permitir_90 else (None, None)
+        
+        # Decide a melhor orientação para o modo Linhas (se for imagem única)
+        if e_imagem_unica and permitir_90:
+            # Testa qual orientação cabe mais na largura da folha
+            largura_util = A4_WIDTH - (2 * m_px)
+            cabe_original = largura_util // (peca.width + e_px)
+            peca_rot = peca.rotate(90, expand=True)
+            m_c_rot = m_c.rotate(90, expand=True)
+            cabe_rotacionada = largura_util // (peca_rot.width + e_px)
+            
+            if cabe_rotacionada > cabe_original:
+                peca, m_c = peca_rot, m_c_rot
+                p_90, m_90 = None, None # Já rotacionado como base
+            else:
+                p_90, m_90 = peca_rot, m_c_rot
+        else:
+            p_90, m_90 = (peca.rotate(90, expand=True), m_c.rotate(90, expand=True)) if permitir_90 else (None, None)
+
         for _ in range(item['quantidade']):
             all_pieces.append({'orig': (peca, m_c), 'rot': (p_90, m_90)})
 
-    # Ordenar por tamanho
     all_pieces.sort(key=lambda x: x['orig'][0].size[0] * x['orig'][0].size[1], reverse=True)
     
     folhas_finais = []
@@ -73,7 +88,6 @@ def montar_multiplas_folhas_inteligente(lista_config, margem_cm, sangria_cm, lin
         nao_couberam = []
 
         if e_imagem_unica:
-            # MODO LINHAS AUTOMÁTICO
             curr_x, curr_y, linha_h = m_px, m_px, 0
             for i, p in enumerate(pecas_restantes):
                 img_p, m_p = p['orig']
@@ -90,7 +104,6 @@ def montar_multiplas_folhas_inteligente(lista_config, margem_cm, sangria_cm, lin
                     nao_couberam = pecas_restantes[i:]
                     break
         else:
-            # MODO TETRIS AUTOMÁTICO
             for p in pecas_restantes:
                 encaixou = False
                 opcoes = [p['orig']]
@@ -113,7 +126,7 @@ def montar_multiplas_folhas_inteligente(lista_config, margem_cm, sangria_cm, lin
         pecas_restantes = nao_couberam
         if len(folhas_finais) > 20: break 
 
-    return folhas_finais, "Linhas" if e_imagem_unica else "Tetris"
+    return folhas_finais, "Linhas Otimizado" if e_imagem_unica else "Tetris"
 
 # --- INTERFACE ---
 st.set_page_config(page_title="ScanNCut Smart Studio", layout="wide")
@@ -125,8 +138,7 @@ with st.sidebar:
     sangria_valor = opcoes_sangria[sangria_sel]
     linha_corte = st.toggle("Linha Preta", value=True) if sangria_valor > 0 else False
     st.divider()
-    st.info("💡 O sistema escolherá automaticamente entre modo 'Linhas' ou 'Tetris' baseado nos seus arquivos.")
-    margem = st.slider("Margem (cm)", 0.3, 1.5, 0.5)
+    margem = st.slider("Margem da Folha (cm)", 0.3, 1.5, 0.5)
 
 st.title("✂️ ScanNCut Pro: Inteligência de Layout")
 
@@ -144,15 +156,15 @@ if uploads:
             m = st.checkbox("Mirror", key=f"m{i}")
             config_list.append({'img': img_ui, 'width_cm': l, 'quantidade': q, 'espelhar': m})
 
-    if st.button("🚀 GERAR PROJETO COMPLETO (PDF)"):
-        with st.spinner("Analisando e organizando..."):
+    if st.button("🚀 GERAR PROJETO COMPLETO"):
+        with st.spinner("Otimizando espaço..."):
             lista_folhas, modo_usado = montar_multiplas_folhas_inteligente(config_list, margem, sangria_valor, linha_corte, True)
             
-            st.success(f"Modo detectado: **{modo_usado}**. Total de {len(lista_folhas)} folha(s).")
+            st.success(f"Modo: **{modo_usado}**. Total de {len(lista_folhas)} folha(s).")
             
             for idx, f in enumerate(lista_folhas):
                 st.image(f, caption=f"Página {idx+1}", use_container_width=True)
             
             buf_pdf = io.BytesIO()
             lista_folhas[0].save(buf_pdf, format="PDF", save_all=True, append_images=lista_folhas[1:], resolution=300.0)
-            st.download_button("📥 Baixar PDF Multi-Páginas", buf_pdf.getvalue(), "projeto_scanncut_smart.pdf", use_container_width=True)
+            st.download_button("📥 Baixar PDF Multi-Páginas", buf_pdf.getvalue(), "projeto_scanncut.pdf", use_container_width=True)
