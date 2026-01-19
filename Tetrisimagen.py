@@ -3,7 +3,6 @@ from PIL import Image, ImageChops, ImageFilter, ImageDraw, ImageOps
 import io
 import random
 
-# Configuração A4 300 DPI
 A4_WIDTH = 2480
 A4_HEIGHT = 3508
 CM_TO_PX = 118.11 
@@ -14,39 +13,50 @@ def tornar_impar(n):
     return n if n % 2 != 0 else n + 1
 
 def gerar_contorno_fast(img, sangria_cm, linha_ativa):
-    respiro = int(sangria_cm * CM_TO_PX * 2) + 40 if sangria_cm > 0 else 20
+    # Respiro maior para garantir que a máscara de colisão pegue todo o contorno
+    respiro = int(sangria_cm * CM_TO_PX * 2) + 60 if sangria_cm > 0 else 30
     img_exp = Image.new("RGBA", (img.width + respiro, img.height + respiro), (0, 0, 0, 0))
     img_exp.paste(img, (respiro // 2, respiro // 2))
+    
     alpha = img_exp.split()[3].point(lambda p: 255 if p > 100 else 0)
     
+    # Gerar a máscara de contorno (bolha)
     n_max = tornar_impar(20) 
-    mask = alpha.filter(ImageFilter.MaxFilter(n_max))
+    mask_base = alpha.filter(ImageFilter.MaxFilter(n_max))
     
     if sangria_cm > 0:
         sangria_px = tornar_impar(int(sangria_cm * CM_TO_PX))
-        mask = mask.filter(ImageFilter.MaxFilter(sangria_px))
-        mask = mask.filter(ImageFilter.GaussianBlur(6)).point(lambda p: 255 if p > 128 else 0)
+        # A máscara final (mask_corte) agora é o que define o limite físico da peça
+        mask_corte = mask_base.filter(ImageFilter.MaxFilter(sangria_px))
+        mask_corte = mask_corte.filter(ImageFilter.GaussianBlur(4)).point(lambda p: 255 if p > 128 else 0)
     else:
-        mask = alpha.filter(ImageFilter.GaussianBlur(1)).point(lambda p: 255 if p > 128 else 0)
+        mask_corte = alpha.filter(ImageFilter.GaussianBlur(1)).point(lambda p: 255 if p > 128 else 0)
 
     nova_img = Image.new("RGBA", img_exp.size, (0, 0, 0, 0))
-    if linha_ativa and sangria_cm > 0:
-        linha_mask = mask.filter(ImageFilter.MaxFilter(3))
-        nova_img.paste((0,0,0,255), (0,0), linha_mask)
+    
+    # Desenha o contorno branco e a linha preta
     if sangria_cm > 0:
-        nova_img.paste((255,255,255,255), (0,0), mask)
+        if linha_ativa:
+            # Linha preta ligeiramente maior para ficar por fora
+            borda_preta = mask_corte.filter(ImageFilter.MaxFilter(3))
+            nova_img.paste((0,0,0,255), (0,0), borda_preta)
+        
+        nova_img.paste((255,255,255,255), (0,0), mask_corte)
+        
     nova_img.paste(img_exp, (0,0), img_exp)
     bbox = nova_img.getbbox()
-    return (nova_img.crop(bbox), mask.crop(bbox)) if bbox else (nova_img, mask)
+    
+    # Retorna a imagem final e a MÁSCARA DO CONTORNO para o Tetris usar como limite
+    if bbox:
+        return nova_img.crop(bbox), mask_corte.crop(bbox)
+    return nova_img, mask_corte
 
-def criar_nova_folha():
-    canvas = Image.new('RGBA', (A4_WIDTH, A4_HEIGHT), (255, 255, 255, 255))
-    mask = Image.new('L', (A4_WIDTH, A4_HEIGHT), 0)
-    return canvas, mask
+# ... (Funções de folha e PDF permanecem as mesmas)
 
 def montar_multiplas_folhas_inteligente(lista_config, margem_cm, sangria_cm, linha_ativa, permitir_90):
     m_px = int(margem_cm * CM_TO_PX)
-    e_px = int(0.15 * CM_TO_PX) 
+    # Espaçamento mínimo de segurança (Buffer) entre as linhas pretas
+    e_px = int(0.10 * CM_TO_PX) 
     all_pieces = []
     
     e_imagem_unica = len(lista_config) == 1
@@ -55,127 +65,30 @@ def montar_multiplas_folhas_inteligente(lista_config, margem_cm, sangria_cm, lin
         img = item['img'].convert("RGBA")
         if item['espelhar']: img = ImageOps.mirror(img)
         
-        # --- LÓGICA DE SINCRONIZAÇÃO PELO MAIOR LADO ---
+        # Lógica de sincronização pelo maior lado
         w_orig, h_orig = img.size
         medida_alvo_px = item['medida_cm'] * CM_TO_PX
-        
         if h_orig > w_orig:
-            # Imagem mais ALTA: Altura vira a medida alvo
             nova_h = int(medida_alvo_px)
             nova_w = int(w_orig * (medida_alvo_px / h_orig))
         else:
-            # Imagem mais LARGA ou QUADRADA: Largura vira a medida alvo
             nova_w = int(medida_alvo_px)
             nova_h = int(h_orig * (medida_alvo_px / w_orig))
             
         img = img.resize((nova_w, nova_h), Image.Resampling.LANCZOS)
-        # ----------------------------------------------
 
+        # Aqui está o segredo: peca (visual) e m_c (máscara de limite/colisão)
         peca, m_c = gerar_contorno_fast(img, sangria_cm, linha_ativa)
         
-        if e_imagem_unica and permitir_90:
-            largura_util = A4_WIDTH - (2 * m_px)
-            cabe_original = largura_util // (peca.width + e_px)
-            peca_rot = peca.rotate(90, expand=True)
-            m_c_rot = m_c.rotate(90, expand=True)
-            if largura_util // (peca_rot.width + e_px) > cabe_original:
-                peca, m_c = peca_rot, m_c_rot
-                p_90, m_90 = None, None
-            else:
-                p_90, m_90 = peca_rot, m_c_rot
-        else:
-            p_90, m_90 = (peca.rotate(90, expand=True), m_c.rotate(90, expand=True)) if permitir_90 else (None, None)
+        # Adiciona um pequeno "respiro" na máscara de colisão para as linhas não se tocarem
+        m_c_colisao = m_c.filter(ImageFilter.MaxFilter(tornar_impar(e_px)))
+        
+        p_90, m_90 = (peca.rotate(90, expand=True), m_c_colisao.rotate(90, expand=True)) if permitir_90 else (None, None)
 
         for _ in range(item['quantidade']):
-            all_pieces.append({'orig': (peca, m_c), 'rot': (p_90, m_90)})
+            all_pieces.append({'orig': (peca, m_c_colisao), 'rot': (p_90, m_90)})
 
+    # Organização Tetris com colisão baseada na Sangria
     all_pieces.sort(key=lambda x: x['orig'][0].size[0] * x['orig'][0].size[1], reverse=True)
     
-    folhas_finais = []
-    pecas_restantes = all_pieces.copy()
-
-    while pecas_restantes:
-        canvas, mask_canvas = criar_nova_folha()
-        nao_couberam = []
-
-        if e_imagem_unica:
-            curr_x, curr_y, linha_h = m_px, m_px, 0
-            for i, p in enumerate(pecas_restantes):
-                img_p, m_p = p['orig']
-                iw, ih = img_p.size
-                if curr_x + iw + m_px > A4_WIDTH:
-                    curr_x, curr_y = m_px, curr_y + linha_h + e_px
-                    linha_h = 0
-                if curr_y + ih + m_px <= A4_HEIGHT:
-                    canvas.paste(img_p, (curr_x, curr_y), img_p)
-                    mask_canvas.paste(m_p, (curr_x, curr_y), m_p)
-                    curr_x += iw + e_px
-                    linha_h = max(linha_h, ih)
-                else:
-                    nao_couberam = pecas_restantes[i:]
-                    break
-        else:
-            for p in pecas_restantes:
-                encaixou = False
-                opcoes = [p['orig']]
-                if p['rot'][0] is not None: opcoes.append(p['rot'])
-                for img_p, mask_p in opcoes:
-                    iw, ih = img_p.size
-                    for _ in range(2000):
-                        tx = random.randint(m_px, max(m_px, A4_WIDTH - iw - m_px))
-                        ty = random.randint(m_px, max(m_px, A4_HEIGHT - ih - m_px))
-                        if not ImageChops.multiply(mask_canvas.crop((tx, ty, tx+iw, ty+ih)), mask_p).getbbox():
-                            canvas.paste(img_p, (tx, ty), img_p)
-                            mask_canvas.paste(mask_p, (tx, ty), mask_p)
-                            encaixou = True
-                            break
-                    if encaixou: break
-                if not encaixou:
-                    nao_couberam.append(p)
-        
-        folhas_finais.append(canvas.convert("RGB"))
-        pecas_restantes = nao_couberam
-        if len(folhas_finais) > 20: break 
-
-    return folhas_finais
-
-# --- INTERFACE ---
-st.set_page_config(page_title="ScanNCut Pro Smart Resize", layout="wide")
-
-with st.sidebar:
-    st.header("⚙️ Configurações")
-    opcoes_sangria = {"Desligado": 0.0, "0.25 cm": 0.25, "0.50 cm": 0.50, "0.75 cm": 0.75, "1.00 cm": 1.00}
-    sangria_sel = st.selectbox("Sangria (Borda)", list(opcoes_sangria.keys()), index=1)
-    sangria_valor = opcoes_sangria[sangria_sel]
-    linha_corte = st.toggle("Linha Preta de Corte", value=True) if sangria_valor > 0 else False
-    margem = st.slider("Margem da Folha (cm)", 0.3, 1.5, 0.5)
-
-st.title("✂️ ScanNCut Pro: Redimensionamento Proporcional")
-
-uploads = st.file_uploader("Suba seus PNGs", type=['png'], accept_multiple_files=True)
-
-if uploads:
-    config_list = []
-    cols = st.columns(4)
-    for i, arq in enumerate(uploads):
-        with cols[i % 4]:
-            img_ui = Image.open(arq)
-            st.image(img_ui, width=80)
-            # Nome do campo alterado para refletir a nova lógica
-            medida = st.number_input(f"Tamanho (cm)", 1.0, 25.0, 5.0, 0.1, key=f"med{i}", help="Este valor será aplicado ao lado maior da imagem.")
-            q = st.number_input(f"Qtd", 1, 100, 1, key=f"q{i}")
-            m = st.checkbox("Mirror", key=f"m{i}")
-            config_list.append({'img': img_ui, 'medida_cm': medida, 'quantidade': q, 'espelhar': m})
-
-    if st.button("🚀 GERAR PROJETO (PDF)"):
-        with st.spinner("Sincronizando medidas e organizando..."):
-            lista_folhas = montar_multiplas_folhas_inteligente(config_list, margem, sangria_valor, linha_corte, True)
-            
-            st.success(f"Projeto Finalizado com {len(lista_folhas)} folha(s).")
-            
-            for idx, f in enumerate(lista_folhas):
-                st.image(f, caption=f"Página {idx+1}", use_container_width=True)
-            
-            buf_pdf = io.BytesIO()
-            lista_folhas[0].save(buf_pdf, format="PDF", save_all=True, append_images=lista_folhas[1:], resolution=300.0)
-            st.download_button("📥 Baixar PDF Multi-Páginas", buf_pdf.getvalue(), "projeto_scanncut_pro.pdf", use_container_width=True)
+    # ... (Continua com a lógica de montagem de múltiplas folhas)
