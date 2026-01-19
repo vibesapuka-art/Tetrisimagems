@@ -13,49 +13,52 @@ def tornar_impar(n):
     return n if n % 2 != 0 else n + 1
 
 def gerar_contorno_individual(img, tipo_contorno, linha_ativa):
-    # tipo_contorno: "Sem Contorno", "Corte no Desenho (0mm)", "Com Sangria"
-    
     if tipo_contorno == "Sem Contorno":
         alpha = img.split()[3].point(lambda p: 255 if p > 100 else 0)
         return img, alpha
 
-    # Define a expessura da borda baseada na escolha
-    p_px = int(0.3 * CM_TO_PX) if tipo_contorno == "Com Sangria" else 2 
+    # 3mm de sangria real (aprox 35 pixels em 300 DPI)
+    p_px = int(0.3 * CM_TO_PX) if tipo_contorno == "Com Sangria (3mm)" else 4 
     
-    respiro = p_px * 2 + 60
+    respiro = p_px * 2 + 80
     img_exp = Image.new("RGBA", (img.width + respiro, img.height + respiro), (0, 0, 0, 0))
     img_exp.paste(img, (respiro // 2, respiro // 2))
     
     alpha = img_exp.split()[3].point(lambda p: 255 if p > 100 else 0)
     
-    # Criar a bolha de contorno
-    mask_corte = alpha.filter(ImageFilter.MaxFilter(tornar_impar(p_px + 10)))
+    # Gerar a bolha de contorno com expansão corrigida
+    mask_corte = alpha.filter(ImageFilter.MaxFilter(tornar_impar(p_px)))
     mask_corte = mask_corte.filter(ImageFilter.GaussianBlur(2)).point(lambda p: 255 if p > 128 else 0)
 
     nova_img = Image.new("RGBA", img_exp.size, (0, 0, 0, 0))
     
     if linha_ativa:
+        # Linha preta externa para guia de corte
         borda_ext = mask_corte.filter(ImageFilter.MaxFilter(5))
         nova_img.paste((0,0,0,255), (0,0), borda_ext)
     
+    # Fundo branco da sangria
     nova_img.paste((255,255,255,255), (0,0), mask_corte)
+    # Imagem original por cima
     nova_img.paste(img_exp, (0,0), img_exp)
     
     bbox = nova_img.getbbox()
     if bbox:
+        # Máscara de colisão para o modo Tetris/Linhas não sobrepor
         mask_colisao = mask_corte.filter(ImageFilter.MaxFilter(3)).crop(bbox)
         return nova_img.crop(bbox), mask_colisao
     return nova_img, mask_corte
 
 def montar_projeto(lista_config, margem_cm, modo_layout):
     m_px = int(margem_cm * CM_TO_PX)
-    e_px = int(0.12 * CM_TO_PX)
+    e_px = int(0.15 * CM_TO_PX) # Espaçamento entre peças
     all_pieces = []
     
     for item in lista_config:
         img = item['img'].convert("RGBA")
         if item['espelhar']: img = ImageOps.mirror(img)
         
+        # Lógica do Maior Lado Sincronizado
         w_orig, h_orig = img.size
         alvo_px = item['medida_cm'] * CM_TO_PX
         
@@ -72,12 +75,12 @@ def montar_projeto(lista_config, margem_cm, modo_layout):
     folhas = []
     pecas_restantes = all_pieces.copy()
 
-    while pecas_restantes and len(folhas) < 15:
+    while pecas_restantes and len(folhas) < 20:
         canvas = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
         mask_canvas = Image.new("L", (A4_WIDTH, A4_HEIGHT), 0)
         ainda_cabem = []
         
-        if modo_layout == "Automático (Linhas)":
+        if modo_layout == "Modo Linhas":
             cx, cy, lh = m_px, m_px, 0
             for i, p in enumerate(pecas_restantes):
                 iw, ih = p['img'].size
@@ -94,11 +97,12 @@ def montar_projeto(lista_config, margem_cm, modo_layout):
                     ainda_cabem = pecas_restantes[i:]
                     break
         else: # MODO TETRIS
+            # Organiza do maior para o menor para melhor encaixe
             pecas_restantes.sort(key=lambda x: x['img'].size[0] * x['img'].size[1], reverse=True)
             for p in pecas_restantes:
                 iw, ih = p['img'].size
                 encaixou = False
-                for _ in range(600): 
+                for _ in range(800): 
                     tx = random.randint(m_px, A4_WIDTH - iw - m_px)
                     ty = random.randint(m_px, A4_HEIGHT - ih - m_px)
                     if not ImageChops.multiply(mask_canvas.crop((tx, ty, tx+iw, ty+ih)), p['mask']).getbbox():
@@ -114,54 +118,62 @@ def montar_projeto(lista_config, margem_cm, modo_layout):
     return folhas
 
 # --- INTERFACE ---
-st.set_page_config(page_title="ScanNCut Smart v3", layout="wide")
+st.set_page_config(page_title="ScanNCut Studio v4", layout="wide")
 
-if 'bulk_size' not in st.session_state: st.session_state.bulk_size = 5.0
-if 'bulk_qtd' not in st.session_state: st.session_state.bulk_qtd = 10
+# Inicialização de estados para Bulk Edit
+if 'bulk_tipo' not in st.session_state: st.session_state.bulk_tipo = "Com Sangria (3mm)"
+if 'bulk_lin' not in st.session_state: st.session_state.bulk_lin = True
 
-st.title("✂️ ScanNCut Pro: Inteligência de Corte")
+st.title("✂️ ScanNCut Pro: Linhas & Tetris")
 
 with st.sidebar:
-    st.header("Configuração Global")
-    modo_escolhido = st.radio("Método de Organização", ["Automático (Linhas)", "Modo Tetris (Encaixe)"])
+    st.header("1. Layout")
+    modo_layout = st.radio("Escolha o Modo", ["Modo Linhas", "Modo Tetris"])
     margem = st.slider("Margem Papel (cm)", 0.3, 1.0, 0.5)
+    
     st.divider()
-    st.subheader("Ajuste em Massa")
-    st.session_state.bulk_size = st.number_input("Tamanho para todos", 1.0, 20.0, 5.0)
-    st.session_state.bulk_qtd = st.number_input("Qtd para todos", 1, 100, 10)
-    aplicar_todos = st.button("🪄 Aplicar a todos os itens")
+    st.header("2. Ajuste em Massa")
+    b_size = st.number_input("Tamanho (Maior Lado)", 1.0, 25.0, 5.0)
+    b_qtd = st.number_input("Quantidade Total", 1, 200, 10)
+    b_tipo = st.selectbox("Tipo de Corte Geral", ["Sem Contorno", "Corte no Desenho (0mm)", "Com Sangria (3mm)"], index=2)
+    b_lin = st.checkbox("Ativar Linha Preta", value=True)
+    aplicar_todos = st.button("🪄 Aplicar em todos os PNGs")
 
-u = st.file_uploader("Suba seus PNGs", type="png", accept_multiple_files=True)
+u = st.file_uploader("Suba seus arquivos PNG", type="png", accept_multiple_files=True)
 
 if u:
     confs = []
     for i, f in enumerate(u):
-        with st.expander(f"🖼️ {f.name}", expanded=True):
+        with st.expander(f"⚙️ Configurar: {f.name}", expanded=True):
             col1, col2, col3 = st.columns([1, 2, 2])
             img = Image.open(f)
             
-            # Lógica de aplicação em massa
-            val_size = st.session_state.bulk_size if aplicar_todos else 5.0
-            val_qtd = st.session_state.bulk_qtd if aplicar_todos else 1
+            # Valores padrão ou massa
+            def_size = b_size if aplicar_todos else 5.0
+            def_qtd = b_qtd if aplicar_todos else 1
+            def_tipo = b_tipo if aplicar_todos else "Com Sangria (3mm)"
+            def_lin = b_lin if aplicar_todos else True
             
             with col1: st.image(img, width=100)
             with col2:
-                med = st.number_input(f"Medida (cm)", 1.0, 25.0, val_size, key=f"m{i}")
-                qtd = st.number_input(f"Quantidade", 1, 100, val_qtd, key=f"q{i}")
+                med = st.number_input(f"Medida (cm)", 1.0, 25.0, def_size, key=f"m{i}")
+                qtd = st.number_input(f"Qtd", 1, 200, def_qtd, key=f"q{i}")
             with col3:
-                tipo = st.selectbox("Tipo de Corte", ["Sem Contorno", "Corte no Desenho (0mm)", "Com Sangria (3mm)"], index=2, key=f"t{i}")
-                lin = st.checkbox("Linha Preta", value=True, key=f"l{i}")
-                mir = st.checkbox("Mirror", key=f"r{i}")
+                tipo_c = st.selectbox("Corte", ["Sem Contorno", "Corte no Desenho (0mm)", "Com Sangria (3mm)"], 
+                                      index=["Sem Contorno", "Corte no Desenho (0mm)", "Com Sangria (3mm)"].index(def_tipo), key=f"t{i}")
+                lin_c = st.checkbox("Linha de Corte", value=def_lin, key=f"l{i}")
+                mir_c = st.checkbox("Espelhar", key=f"r{i}")
             
-            confs.append({'img': img, 'medida_cm': med, 'quantidade': qtd, 'espelhar': mir, 'tipo': tipo, 'linha': lin})
+            confs.append({'img': img, 'medida_cm': med, 'quantidade': qtd, 'espelhar': mir_c, 'tipo': tipo_c, 'linha': lin_c})
 
-    if st.button("🚀 GERAR PROJETO FINAL"):
-        folhas = montar_projeto(confs, margem, modo_escolhido)
-        if folhas:
-            st.success(f"Projeto Finalizado! ({modo_escolhido})")
-            for idx, f in enumerate(folhas):
-                st.image(f, caption=f"Página {idx+1}", use_container_width=True)
-            
-            out = io.BytesIO()
-            folhas[0].save(out, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-            st.download_button("📥 Baixar PDF", out.getvalue(), "projeto_scanncut.pdf")
+    if st.button("🚀 GERAR FOLHAS"):
+        with st.spinner("Processando peças..."):
+            folhas = montar_projeto(confs, margem, modo_layout)
+            if folhas:
+                st.success(f"Concluído! Foram geradas {len(folhas)} folha(s).")
+                for idx, f in enumerate(folhas):
+                    st.image(f, caption=f"Página {idx+1}", use_container_width=True)
+                
+                out = io.BytesIO()
+                folhas[0].save(out, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
+                st.download_button("📥 Baixar PDF Completo", out.getvalue(), "projeto_scanncut.pdf", use_container_width=True)
