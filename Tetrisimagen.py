@@ -12,13 +12,11 @@ def tornar_impar(n):
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
+# --- FUNÇÃO DE CONTORNO COM CORREÇÃO DE PIXEL REAL ---
 def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa):
-    # --- CORREÇÃO DE TAMANHO: FOCA NO PIXEL COLORIDO ---
-    # Isso garante que espaços vazios no PNG original sejam ignorados
     bbox_original = img.getbbox()
     if bbox_original:
         img = img.crop(bbox_original)
-    # ---------------------------------------------------
 
     if tipo_contorno == "Sem Contorno":
         alpha = img.split()[3].point(lambda p: 255 if p > 100 else 0)
@@ -52,6 +50,7 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
         return nova_img.crop(bbox_final), mask_colisao
     return nova_img, mask_corte
 
+# --- LÓGICA DE MONTAGEM ---
 def montar_projeto(lista_config, margem_cm, modo_layout):
     m_px = int(margem_cm * CM_TO_PX)
     e_px = int(0.12 * CM_TO_PX) 
@@ -59,17 +58,13 @@ def montar_projeto(lista_config, margem_cm, modo_layout):
     
     for item in lista_config:
         img = item['img'].convert("RGBA")
-        
-        # Ignora transparência morta antes de redimensionar
         bbox = img.getbbox()
         if bbox: img = img.crop(bbox)
-        
         if item['espelhar']: img = ImageOps.mirror(img)
         
         w_orig, h_orig = img.size
         alvo_px = item['medida_cm'] * CM_TO_PX
         
-        # Redimensiona baseado no pixel real, não no arquivo
         if h_orig > w_orig:
             img = img.resize((int(w_orig * (alvo_px / h_orig)), int(alvo_px)), Image.LANCZOS)
         else:
@@ -124,48 +119,63 @@ def montar_projeto(lista_config, margem_cm, modo_layout):
 
     return folhas
 
-# --- INTERFACE (Mesma da v5 com melhorias de descrição) ---
+# --- INTERFACE ---
 st.set_page_config(page_title="ScanNCut Studio Pro", layout="wide")
-st.title("✂️ ScanNCut Pro: Calibração de Tamanho Real")
+st.title("✂️ ScanNCut Pro: Sincronização Corrigida")
+
+# Inicialização dos arquivos no estado da sessão para não perder no upload
+if 'uploads' not in st.session_state:
+    st.session_state.uploads = []
 
 with st.sidebar:
     st.header("1. Layout")
     modo_layout = st.radio("Organização", ["Modo Linhas", "Modo Tetris"])
     margem = st.slider("Margem Papel (cm)", 0.3, 1.0, 0.5)
+    
     st.divider()
     st.header("2. Ajuste em Massa")
-    b_size = st.number_input("Tamanho Exato (cm)", 1.0, 25.0, 5.0, help="O sistema ignorará transparências e focará no desenho.")
+    b_size = st.number_input("Tamanho Exato (cm)", 1.0, 25.0, 3.0)
     b_qtd = st.number_input("Qtd Total", 1, 200, 10)
     b_sangria = st.selectbox("Sangria", ["3mm", "5mm", "7mm", "9mm"], index=0)
     b_tipo = st.selectbox("Corte", ["Sem Contorno", "Corte no Desenho (0mm)", "Com Sangria"], index=2)
     b_lin = st.checkbox("Linha Preta", value=True)
-    aplicar_todos = st.button("🪄 Sincronizar Tudo")
+    
+    # BOTÃO SINCRONIZAR COM LÓGICA DE ESTADO
+    if st.button("🪄 Sincronizar Tudo"):
+        for i in range(len(st.session_state.uploads)):
+            st.session_state[f"m{i}"] = b_size
+            st.session_state[f"q{i}"] = b_qtd
+            st.session_state[f"t{i}"] = b_tipo
+            if b_tipo == "Com Sangria":
+                st.session_state[f"s{i}"] = b_sangria
+            st.session_state[f"l{i}"] = b_lin
+        st.success("Sincronizado!")
 
 u = st.file_uploader("Suba seus PNGs", type="png", accept_multiple_files=True)
-
 if u:
+    st.session_state.uploads = u
     confs = []
     for i, f in enumerate(u):
         with st.expander(f"⚙️ {f.name}", expanded=True):
             col1, col2, col3 = st.columns([1, 2, 2])
             img = Image.open(f)
-            def_size = b_size if aplicar_todos else 5.0
-            def_qtd = b_qtd if aplicar_todos else 1
-            def_tipo = b_tipo if aplicar_todos else "Com Sangria"
-            def_sang = b_sangria if aplicar_todos else "3mm"
-            def_lin = b_lin if aplicar_todos else True
             
             with col1: st.image(img, width=100)
             with col2:
-                med = st.number_input(f"Medida Real (cm)", 1.0, 25.0, def_size, key=f"m{i}")
-                qtd = st.number_input(f"Qtd", 1, 200, def_qtd, key=f"q{i}")
+                # Usamos st.session_state.get para manter os valores sincronizados
+                med = st.number_input(f"Medida Real (cm)", 1.0, 25.0, key=f"m{i}")
+                qtd = st.number_input(f"Qtd", 1, 200, key=f"q{i}")
             with col3:
-                tipo_c = st.selectbox("Corte", ["Sem Contorno", "Corte no Desenho (0mm)", "Com Sangria"], 
-                                      index=["Sem Contorno", "Corte no Desenho (0mm)", "Com Sangria"].index(def_tipo), key=f"t{i}")
-                sang_mm = st.selectbox("Sangria", ["3mm", "5mm", "7mm", "9mm"], 
-                                       index=["3mm", "5mm", "7mm", "9mm"].index(def_sang), key=f"s{i}") if tipo_c == "Com Sangria" else "0mm"
-                lin_c = st.checkbox("Linha Preta", value=def_lin, key=f"l{i}")
+                tipo_c = st.selectbox("Corte", ["Sem Contorno", "Corte no Desenho (0mm)", "Com Sangria"], key=f"t{i}")
+                
+                # Controle da Sangria condicional
+                sang_mm = "0mm"
+                if tipo_c == "Com Sangria":
+                    sang_mm = st.selectbox("Sangria", ["3mm", "5mm", "7mm", "9mm"], key=f"s{i}")
+                
+                lin_c = st.checkbox("Linha Preta", key=f"l{i}")
                 mir_c = st.checkbox("Espelhar", key=f"r{i}")
+            
             confs.append({'img': img, 'medida_cm': med, 'quantidade': qtd, 'espelhar': mir_c, 'tipo': tipo_c, 'sangria_val': sang_mm, 'linha': lin_c})
 
     if st.button("🚀 GERAR PROJETO"):
