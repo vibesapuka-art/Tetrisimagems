@@ -3,6 +3,7 @@ from PIL import Image, ImageChops, ImageFilter, ImageDraw, ImageOps
 import io
 import random
 
+# Configuração A4 300 DPI
 A4_WIDTH = 2480
 A4_HEIGHT = 3508
 CM_TO_PX = 118.11 
@@ -43,11 +44,14 @@ def criar_nova_folha():
     mask = Image.new('L', (A4_WIDTH, A4_HEIGHT), 0)
     return canvas, mask
 
-def montar_multiplas_folhas(lista_config, margem_cm, sangria_cm, linha_ativa, permitir_90):
+def montar_multiplas_folhas_inteligente(lista_config, margem_cm, sangria_cm, linha_ativa, permitir_90):
     m_px = int(margem_cm * CM_TO_PX)
+    e_px = int(0.15 * CM_TO_PX) # Espaço fixo pequeno entre peças
     all_pieces = []
     
-    # Preparação das peças
+    # Identifica se é imagem única ou várias
+    e_imagem_unica = len(lista_config) == 1
+
     for item in lista_config:
         img = item['img'].convert("RGBA")
         if item['espelhar']: img = ImageOps.mirror(img)
@@ -58,6 +62,7 @@ def montar_multiplas_folhas(lista_config, margem_cm, sangria_cm, linha_ativa, pe
         for _ in range(item['quantidade']):
             all_pieces.append({'orig': (peca, m_c), 'rot': (p_90, m_90)})
 
+    # Ordenar por tamanho
     all_pieces.sort(key=lambda x: x['orig'][0].size[0] * x['orig'][0].size[1], reverse=True)
     
     folhas_finais = []
@@ -65,48 +70,65 @@ def montar_multiplas_folhas(lista_config, margem_cm, sangria_cm, linha_ativa, pe
 
     while pecas_restantes:
         canvas, mask_canvas = criar_nova_folha()
-        ainda_cabem_nesta_folha = []
         nao_couberam = []
 
-        for p in pecas_restantes:
-            encaixou = False
-            opcoes = [p['orig']]
-            if p['rot'][0] is not None: opcoes.append(p['rot'])
-            
-            for img_p, mask_p in opcoes:
+        if e_imagem_unica:
+            # MODO LINHAS AUTOMÁTICO
+            curr_x, curr_y, linha_h = m_px, m_px, 0
+            for i, p in enumerate(pecas_restantes):
+                img_p, m_p = p['orig']
                 iw, ih = img_p.size
-                for _ in range(1500): # Busca rápida para múltiplas folhas
-                    tx = random.randint(m_px, max(m_px, A4_WIDTH - iw - m_px))
-                    ty = random.randint(m_px, max(m_px, A4_HEIGHT - ih - m_px))
-                    if not ImageChops.multiply(mask_canvas.crop((tx, ty, tx+iw, ty+ih)), mask_p).getbbox():
-                        canvas.paste(img_p, (tx, ty), img_p)
-                        mask_canvas.paste(mask_p, (tx, ty), mask_p)
-                        encaixou = True
-                        break
-                if encaixou: break
-            
-            if not encaixou:
-                nao_couberam.append(p)
+                if curr_x + iw + m_px > A4_WIDTH:
+                    curr_x, curr_y = m_px, curr_y + linha_h + e_px
+                    linha_h = 0
+                if curr_y + ih + m_px <= A4_HEIGHT:
+                    canvas.paste(img_p, (curr_x, curr_y), img_p)
+                    mask_canvas.paste(m_p, (curr_x, curr_y), m_p)
+                    curr_x += iw + e_px
+                    linha_h = max(linha_h, ih)
+                else:
+                    nao_couberam = pecas_restantes[i:]
+                    break
+        else:
+            # MODO TETRIS AUTOMÁTICO
+            for p in pecas_restantes:
+                encaixou = False
+                opcoes = [p['orig']]
+                if p['rot'][0] is not None: opcoes.append(p['rot'])
+                for img_p, mask_p in opcoes:
+                    iw, ih = img_p.size
+                    for _ in range(1500):
+                        tx = random.randint(m_px, max(m_px, A4_WIDTH - iw - m_px))
+                        ty = random.randint(m_px, max(m_px, A4_HEIGHT - ih - m_px))
+                        if not ImageChops.multiply(mask_canvas.crop((tx, ty, tx+iw, ty+ih)), mask_p).getbbox():
+                            canvas.paste(img_p, (tx, ty), img_p)
+                            mask_canvas.paste(mask_p, (tx, ty), mask_p)
+                            encaixou = True
+                            break
+                    if encaixou: break
+                if not encaixou:
+                    nao_couberam.append(p)
         
         folhas_finais.append(canvas.convert("RGB"))
         pecas_restantes = nao_couberam
-        if len(folhas_finais) > 15: break # Limite de segurança
+        if len(folhas_finais) > 20: break 
 
-    return folhas_finais
+    return folhas_finais, "Linhas" if e_imagem_unica else "Tetris"
 
 # --- INTERFACE ---
-st.set_page_config(page_title="ScanNCut Multi-Page", layout="wide")
+st.set_page_config(page_title="ScanNCut Smart Studio", layout="wide")
 
 with st.sidebar:
-    st.header("📏 Configurações")
+    st.header("⚙️ Configurações")
     opcoes_sangria = {"Desligado": 0.0, "0.25 cm": 0.25, "0.50 cm": 0.50, "0.75 cm": 0.75, "1.00 cm": 1.00}
     sangria_sel = st.selectbox("Sangria", list(opcoes_sangria.keys()), index=1)
     sangria_valor = opcoes_sangria[sangria_sel]
     linha_corte = st.toggle("Linha Preta", value=True) if sangria_valor > 0 else False
-    girar_90 = st.checkbox("Girar Peças (Auto)", value=True)
+    st.divider()
+    st.info("💡 O sistema escolherá automaticamente entre modo 'Linhas' ou 'Tetris' baseado nos seus arquivos.")
     margem = st.slider("Margem (cm)", 0.3, 1.5, 0.5)
 
-st.title("✂️ ScanNCut: Gerador de Múltiplas Folhas")
+st.title("✂️ ScanNCut Pro: Inteligência de Layout")
 
 uploads = st.file_uploader("Suba seus PNGs", type=['png'], accept_multiple_files=True)
 
@@ -122,17 +144,15 @@ if uploads:
             m = st.checkbox("Mirror", key=f"m{i}")
             config_list.append({'img': img_ui, 'width_cm': l, 'quantidade': q, 'espelhar': m})
 
-    if st.button("🚀 GERAR TODAS AS FOLHAS EM PDF"):
-        with st.spinner("Organizando peças em várias folhas..."):
-            lista_folhas = montar_multiplas_folhas(config_list, margem, sangria_valor, linha_corte, girar_90)
+    if st.button("🚀 GERAR PROJETO COMPLETO (PDF)"):
+        with st.spinner("Analisando e organizando..."):
+            lista_folhas, modo_usado = montar_multiplas_folhas_inteligente(config_list, margem, sangria_valor, linha_corte, True)
             
-            st.success(f"Sucesso! Geradas {len(lista_folhas)} folha(s) para acomodar todas as peças.")
+            st.success(f"Modo detectado: **{modo_usado}**. Total de {len(lista_folhas)} folha(s).")
             
             for idx, f in enumerate(lista_folhas):
-                st.image(f, caption=f"Folha {idx+1}", use_container_width=True)
+                st.image(f, caption=f"Página {idx+1}", use_container_width=True)
             
-            # Gerar PDF único
             buf_pdf = io.BytesIO()
             lista_folhas[0].save(buf_pdf, format="PDF", save_all=True, append_images=lista_folhas[1:], resolution=300.0)
-            
-            st.download_button("📥 Baixar PDF Completo (Todas as Folhas)", buf_pdf.getvalue(), "projeto_scanncut.pdf", use_container_width=True)
+            st.download_button("📥 Baixar PDF Multi-Páginas", buf_pdf.getvalue(), "projeto_scanncut_smart.pdf", use_container_width=True)
