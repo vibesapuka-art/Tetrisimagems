@@ -38,14 +38,12 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
     alpha_base = Image.new("L", (img_s.width + respiro, img_s.height + respiro), 0)
     alpha_base.paste(img_s.split()[3], (respiro // 2, respiro // 2))
     
-    # Máscara da Sangria
     mask = alpha_base.filter(ImageFilter.MaxFilter(tornar_impar(p_px_s)))
     
     if nivel_suavidade > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(radius=nivel_suavidade * fator))
         mask = mask.point(lambda p: 255 if p > 128 else 0)
 
-    # Máscara da Linha (Stroke Externo)
     mask_linha = mask.filter(ImageFilter.MaxFilter(tornar_impar(l_px_s if l_px_s > 0 else 1)))
 
     mask_f = mask.resize((img.width + distancia_px*2 + 180, img.height + distancia_px*2 + 180), Image.LANCZOS)
@@ -117,12 +115,15 @@ def montar_projeto(lista_config, margem_cm, nivel_suavidade, espessura_linha):
     return folhas
 
 # --- INTERFACE ---
-st.set_page_config(page_title="ScanNCut Studio Pro", layout="wide")
-st.title("✂️ ScanNCut Pro - Configuração Otimizada")
+
+# Nome do App na aba do Navegador
+st.set_page_config(page_title="Bazzott Lov´s Editor", layout="wide")
+
+# Título visual na tela
+st.title("✂️ Bazzott Lov´s Editor")
 
 with st.sidebar:
     st.header("1. Ajustes Globais")
-    # PADRÃO 0.3mm e 30 de arredondamento conforme pedido
     espessura_linha = st.slider("Espessura da Linha de Corte (mm)", 0.1, 10.0, 0.3, step=0.1)
     suavidade = st.slider("Arredondamento de Cantos", 0, 30, 30)
     margem = st.slider("Margem do Papel (cm)", 0.5, 2.5, 1.0)
@@ -155,10 +156,12 @@ if u:
             confs.append({'img': img, 'medida_cm': med, 'quantidade': qtd, 'tipo': tipo, 'sangria_val': sang, 'linha': lin})
 
     if st.button("🚀 GERAR PDF"):
-        with st.spinner("Gerando layout com contornos suavizados..."):
+        with st.spinner("Gerando layout..."):
             folhas = montar_projeto(confs, margem, suavidade, espessura_linha)
             if folhas:
                 for idx, f in enumerate(folhas): st.image(f, caption=f"Página {idx+1}", use_container_width=True)
                 pdf_output = io.BytesIO()
                 folhas[0].save(pdf_output, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-                st.download_button("📥 Baixar PDF", pdf_output.getvalue(), "projeto_scanncut_pro.pdf", use_container_width=True)
+                
+                # Nome do arquivo PDF baixado
+                st.download_button("📥 Baixar PDF", pdf_output.getvalue(), "Bazzott_Lovs_Editor_Projeto.pdf", use_container_width=True)
