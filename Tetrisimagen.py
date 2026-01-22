@@ -117,7 +117,7 @@ def montar_projeto(lista_config, margem_cm, nivel_suavidade, espessura_linha):
 # --- INTERFACE ---
 
 # Nome do App na aba do Navegador
-st.set_page_config(page_title="Bazzott Lov´s Editor", layout="wide")
+st.set_page_config(page_title="Bazzott Art Editor", layout="wide")
 
 # Título visual na tela
 st.title("✂️ Bazzott Lov´s Editor")
