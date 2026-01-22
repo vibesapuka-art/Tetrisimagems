@@ -3,7 +3,8 @@ from PIL import Image, ImageChops, ImageFilter
 import io
 import random
 
-# --- CONFIGURAÇÕES TÉCNICAS ---
+# --- CONFIGURAÇÕES TÉCNICAS (PRECISÃO 300 DPI) ---
+# Em 300 DPI, 1cm é exatamente 118.11 pixels
 A4_WIDTH, A4_HEIGHT = 2480, 3508
 CM_TO_PX = 118.11 
 
@@ -20,7 +21,7 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
     if tipo_contorno == "Sem Contorno":
         return img, img.split()[3].point(lambda p: 255 if p > 100 else 0)
 
-    # Converte mm para cm. Suporta "2.5mm", "3mm", etc.
+    # Converte mm para cm (Trata 2.5mm corretamente)
     val_mm = float(sangria_escolhida.replace('mm', '').replace(',', '.'))
     val_cm = 0.05 if tipo_contorno == "Corte no Desenho (0mm)" else val_mm / 10
     p_px = int(val_cm * CM_TO_PX)
@@ -65,7 +66,7 @@ def montar_projeto(lista_config, margem_cm, modo_layout, nivel_suavidade):
     all_pieces = []
     for item in lista_config:
         img_base = item['img'].convert("RGBA")
-        alvo_px = item['medida_cm'] * CM_TO_PX
+        alvo_px = item['medida_cm'] * CM_TO_PX # Medida Real em Pixels
         w, h = img_base.size
         img_res = img_base.resize((int(w*(alvo_px/h)), int(alvo_px)) if h>w else (int(alvo_px), int(h*(alvo_px/w))), Image.LANCZOS)
         pv, pm = gerar_contorno_individual(img_res, item['tipo'], item['sangria_val'], item['linha'], nivel_suavidade)
@@ -120,7 +121,7 @@ st.set_page_config(page_title="ScanNCut Studio Pro", layout="wide")
 if 'galeria' not in st.session_state:
     st.session_state.galeria = []
 
-# Opções de sangria atualizadas com 2.5mm
+# Opções de sangria atualizadas
 lista_mm = ["2.5mm", "3mm", "5mm", "7mm", "9mm"]
 
 with st.sidebar:
@@ -131,7 +132,7 @@ with st.sidebar:
     
     st.divider()
     st.header("2. Sincronização em Massa")
-    b_size = st.number_input("Tamanho Padrão (cm)", 1.0, 25.0, 5.0)
+    b_size = st.number_input("Tamanho Padrão (cm)", 1.0, 25.0, 4.0)
     b_qtd = st.number_input("Quantidade Padrão", 1, 100, 10)
     b_sangria = st.selectbox("Sangria Padrão (mm)", lista_mm, index=0)
     
@@ -155,7 +156,7 @@ if st.session_state.galeria:
             c1, c2, c3 = st.columns([1, 2, 2])
             with c1: st.image(item['img'], width=80)
             with c2:
-                med = st.number_input(f"Medida (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 5.0))
+                med = st.number_input(f"Medida (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
                 qtd = st.number_input(f"Qtd", 1, 100, key=f"q{i}", value=st.session_state.get(f"q{i}", 10))
             with c3:
                 tipo = st.selectbox("Corte", ["Com Sangria", "Corte no Desenho (0mm)"], key=f"t{i}")
@@ -168,7 +169,8 @@ if st.session_state.galeria:
     if st.button("🚀 GERAR PROJETO CENTRALIZADO", use_container_width=True):
         folhas = montar_projeto(confs, margem, modo_layout, suavidade)
         if folhas:
-            for idx, f in enumerate(folhas): st.image(f, caption=f"Página {idx+1}", use_container_width=True)
+            for idx, f in enumerate(folhas): st.image(f, caption=f"Página {idx+1}")
             out = io.BytesIO()
-            folhas[0].save(out, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-            st.download_button("📥 Baixar PDF Final", out.getvalue(), "projeto_scanncut.pdf", use_container_width=True)
+            # SALVAMENTO RIGOROSO COM 300 DPI
+            folhas[0].save(out, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0, quality=100)
+            st.download_button("📥 Baixar PDF Final (Escala 1:1)", out.getvalue(), "projeto_scanncut.pdf", use_container_width=True)
