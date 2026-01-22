@@ -87,9 +87,6 @@ def montar_folhas(pecas, margem_cm):
 # --- INTERFACE ---
 st.set_page_config(page_title="Bazzott Lov´s Studio Pro", layout="wide")
 
-if 'galeria' not in st.session_state:
-    st.session_state.galeria = []
-
 with st.sidebar:
     st.header("⚙️ Configurações Globais")
     margem = st.slider("Margem da Folha (cm)", 0.5, 2.0, 1.0)
@@ -101,47 +98,51 @@ with st.sidebar:
     b_qtd = st.number_input("Quantidade Total", 1, 500, 20)
     b_san = st.slider("Sangria Padrão (cm)", 0.0, 1.0, 0.25, step=0.05)
     
+    # Sincroniza apenas os arquivos que estão atualmente no uploader
     if st.button("Aplicar a Todos os Itens"):
-        for i in range(len(st.session_state.galeria)):
-            st.session_state[f"m{i}"] = b_tam
-            st.session_state[f"q{i}"] = b_qtd
-            st.session_state[f"s{i}"] = b_san
+        if 'arquivos_atuais' in st.session_state:
+            for f in st.session_state.arquivos_atuais:
+                st.session_state[f"m_{f.name}"] = b_tam
+                st.session_state[f"q_{f.name}"] = b_qtd
+                st.session_state[f"s_{f.name}"] = b_san
         st.rerun()
 
+# Uploader de arquivos
 u = st.file_uploader("Arraste seus PNGs aqui", type="png", accept_multiple_files=True)
-if u:
-    for f in u:
-        if f.name not in [img['name'] for img in st.session_state.galeria]:
-            st.session_state.galeria.append({"name": f.name, "img": Image.open(f)})
+st.session_state.arquivos_atuais = u if u else []
 
-if st.session_state.galeria:
+if st.session_state.arquivos_atuais:
     pecas_para_pdf = []
     total_figuras = 0
     
-    for i, item in enumerate(st.session_state.galeria):
-        with st.expander(f"Ajustar: {item['name']}", expanded=True):
+    for f in st.session_state.arquivos_atuais:
+        # Chave única baseada no nome do arquivo para manter as configs ao subir novos
+        chave = f.name 
+        
+        with st.expander(f"Ajustar: {chave}", expanded=True):
             c1, c2, c3 = st.columns([1, 2, 2])
-            with c1: st.image(item['img'], width=80)
-            with c2:
-                t = st.number_input("Tamanho (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
-                q = st.number_input("Qtd", 1, 500, key=f"q{i}", value=st.session_state.get(f"q{i}", 1))
-            with c3:
-                s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s{i}", value=st.session_state.get(f"s{i}", 0.25), step=0.05)
-                l = st.checkbox("Linha de Corte Preta", True, key=f"l{i}")
+            img_original = Image.open(f)
             
-            p_processada = gerar_contorno_individual(item['img'], t, s, l, suave)
+            with c1: st.image(img_original, width=80)
+            with c2:
+                t = st.number_input("Tamanho (cm)", 1.0, 25.0, key=f"m_{chave}", value=st.session_state.get(f"m_{chave}", 4.0))
+                q = st.number_input("Qtd", 1, 500, key=f"q_{chave}", value=st.session_state.get(f"q_{chave}", 1))
+            with c3:
+                s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s_{chave}", value=st.session_state.get(f"s_{chave}", 0.25), step=0.05)
+                l = st.checkbox("Linha de Corte Preta", True, key=f"l_{chave}")
+            
+            p_processada = gerar_contorno_individual(img_original, t, s, l, suave)
             for _ in range(q): 
                 pecas_para_pdf.append(p_processada)
                 total_figuras += 1
 
-    # Informação visual da contagem na barra lateral
     st.sidebar.markdown(f"### 📊 Resumo do Projeto")
     st.sidebar.info(f"Total de figuras: **{total_figuras}**")
 
     if st.button(f"🚀 GERAR PDF COM {total_figuras} FIGURAS", use_container_width=True):
         folhas_finais = montar_folhas(pecas_para_pdf, margem)
         if folhas_finais:
-            st.success(f"✅ Sucesso! O PDF foi montado com um total de **{total_figuras}** figuras em **{len(folhas_finais)}** página(s).")
+            st.success(f"✅ Sucesso! O PDF foi montado com **{total_figuras}** figuras.")
             for idx, f in enumerate(folhas_finais): st.image(f, caption=f"Página {idx+1}")
             pdf_output = io.BytesIO()
             folhas_finais[0].save(pdf_output, format="PDF", save_all=True, append_images=folhas_finais[1:], resolution=300.0)
