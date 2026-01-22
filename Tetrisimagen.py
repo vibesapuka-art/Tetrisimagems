@@ -13,46 +13,36 @@ def tornar_impar(n):
 
 # --- MOTOR DE CONTORNO ---
 def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade):
-    # 1. Limpa transparências ao redor do desenho
     bbox_limpeza = img.getbbox()
     if bbox_limpeza:
         img = img.crop(bbox_limpeza)
 
-    # 2. REDIMENSIONAMENTO DO DESENHO (Tamanho Real solicitado)
     alvo_px = int(medida_cm * CM_TO_PX)
     w, h = img.size
     proporcao = min(alvo_px / w, alvo_px / h)
     img = img.resize((int(w * proporcao), int(h * proporcao)), Image.LANCZOS).convert("RGBA")
 
-    # 3. CÁLCULO DA SANGRIA (Agora baseado em CM vindo do slider)
     dist_px = int(sangria_cm * CM_TO_PX)
     
-    # 4. CRIAÇÃO DA MÁSCARA (Se sangria for 0, usa apenas o alpha original)
     if dist_px > 0:
         padding = dist_px + 40
         canvas_alpha = Image.new("L", (img.width + padding*2, img.height + padding*2), 0)
         canvas_alpha.paste(img.split()[3], (padding, padding))
-        
         mask = canvas_alpha.filter(ImageFilter.MaxFilter(tornar_impar(dist_px)))
-        
         if nivel_suavidade > 0:
             mask = mask.filter(ImageFilter.GaussianBlur(radius=nivel_suavidade/2))
             mask = mask.point(lambda p: 255 if p > 128 else 0)
     else:
         mask = img.split()[3].point(lambda p: 255 if p > 128 else 0)
 
-    # 5. MONTAGEM FINAL
     peca_final = Image.new("RGBA", mask.size if dist_px > 0 else img.size, (0, 0, 0, 0))
     
-    # Linha Preta de Corte (ScanNCut)
     if linha_ativa:
         linha_mask = mask.filter(ImageFilter.MaxFilter(3)) if dist_px > 0 else mask
         peca_final.paste((0, 0, 0, 255), (0, 0), linha_mask)
     
-    # Fundo Branco da Sangria
     peca_final.paste((255, 255, 255, 255), (0, 0), mask)
     
-    # Imagem original centralizada
     if dist_px > 0:
         off_x = (peca_final.width - img.width) // 2
         off_y = (peca_final.height - img.height) // 2
@@ -108,9 +98,8 @@ with st.sidebar:
     st.divider()
     st.header("🪄 Sincronização em Massa")
     b_tam = st.number_input("Tamanho do Desenho (cm)", 1.0, 25.0, 4.0)
-    b_qtd = st.number_input("Quantidade Total", 1, 300, 20)
-    # Novo seletor de sangria de 0 a 1cm
-    b_san = st.slider("Sangria Padrão (cm)", 0.0, 1.0, 0.25, step=0.05, help="0.25cm equivale a 2.5mm")
+    b_qtd = st.number_input("Quantidade Total", 1, 500, 20)
+    b_san = st.slider("Sangria Padrão (cm)", 0.0, 1.0, 0.25, step=0.05)
     
     if st.button("Aplicar a Todos os Itens"):
         for i in range(len(st.session_state.galeria)):
@@ -127,24 +116,32 @@ if u:
 
 if st.session_state.galeria:
     pecas_para_pdf = []
+    total_figuras = 0
+    
     for i, item in enumerate(st.session_state.galeria):
         with st.expander(f"Ajustar: {item['name']}", expanded=True):
             c1, c2, c3 = st.columns([1, 2, 2])
             with c1: st.image(item['img'], width=80)
             with c2:
                 t = st.number_input("Tamanho (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
-                q = st.number_input("Qtd", 1, 300, key=f"q{i}", value=st.session_state.get(f"q{i}", 1))
+                q = st.number_input("Qtd", 1, 500, key=f"q{i}", value=st.session_state.get(f"q{i}", 1))
             with c3:
-                # Sangria individual também como slider
                 s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s{i}", value=st.session_state.get(f"s{i}", 0.25), step=0.05)
                 l = st.checkbox("Linha de Corte Preta", True, key=f"l{i}")
             
             p_processada = gerar_contorno_individual(item['img'], t, s, l, suave)
-            for _ in range(q): pecas_para_pdf.append(p_processada)
+            for _ in range(q): 
+                pecas_para_pdf.append(p_processada)
+                total_figuras += 1
 
-    if st.button("🚀 GERAR PDF PARA IMPRESSÃO", use_container_width=True):
+    # Informação visual da contagem na barra lateral
+    st.sidebar.markdown(f"### 📊 Resumo do Projeto")
+    st.sidebar.info(f"Total de figuras: **{total_figuras}**")
+
+    if st.button(f"🚀 GERAR PDF COM {total_figuras} FIGURAS", use_container_width=True):
         folhas_finais = montar_folhas(pecas_para_pdf, margem)
         if folhas_finais:
+            st.success(f"✅ Sucesso! O PDF foi montado com um total de **{total_figuras}** figuras em **{len(folhas_finais)}** página(s).")
             for idx, f in enumerate(folhas_finais): st.image(f, caption=f"Página {idx+1}")
             pdf_output = io.BytesIO()
             folhas_finais[0].save(pdf_output, format="PDF", save_all=True, append_images=folhas_finais[1:], resolution=300.0)
