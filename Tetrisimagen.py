@@ -3,6 +3,7 @@ from PIL import Image, ImageFilter
 import io
 
 # --- CONFIGURAÇÕES TÉCNICAS (PADRÃO A4 300 DPI) ---
+# O uso de 118.11 pixels por cm garante que o tamanho físico seja respeitado 
 A4_WIDTH, A4_HEIGHT = 2480, 3508
 CM_TO_PX = 118.11 
 
@@ -11,7 +12,7 @@ def tornar_impar(n):
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-# --- INICIALIZAÇÃO DO ESTADO DA SESSÃO (MEMÓRIA PERSISTENTE) ---
+# --- INICIALIZAÇÃO DA MEMÓRIA PERSISTENTE ---
 if 'galeria' not in st.session_state:
     st.session_state.galeria = []
 
@@ -70,7 +71,7 @@ def montar_projeto(lista_config, margem_cm, nivel_suavidade, espessura_linha):
     all_pieces = []
     for item in lista_config:
         img_base = item['img'].convert("RGBA")
-        alvo_px = item['medida_cm'] * CM_TO_PX
+        alvo_px = item['medida_cm'] * CM_TO_PX # Define o tamanho real baseado em DPI 
         w, h = img_base.size
         img_res = img_base.resize((int(w*(alvo_px/h)), int(alvo_px)) if h>w else (int(alvo_px), int(h*(alvo_px/w))), Image.LANCZOS)
         pv = gerar_contorno_individual(img_res, item['tipo'], item['sangria_val'], item['linha'], nivel_suavidade, espessura_linha)
@@ -91,7 +92,6 @@ def montar_projeto(lista_config, margem_cm, nivel_suavidade, espessura_linha):
                 cx, lh = cx + iw + e_px, max(lh, ih)
             else: ainda_cabem.append(p)
         
-        # Centralização automática do bloco de imagens na folha
         bbox = temp_canvas.getbbox()
         if bbox:
             f_p = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
@@ -117,10 +117,10 @@ with st.sidebar:
     
     st.divider()
     st.header("📦 2. Sincronização em Massa")
-    b_size = st.number_input("Tamanho Padrão (cm)", 1.0, 25.0, 5.0)
-    b_qtd = st.number_input("Quantidade Padrão", 1, 100, 1)
+    b_size = st.number_input("Tamanho Padrão (cm)", 1.0, 25.0, 4.0) # Ajustado para 4cm
+    b_qtd = st.number_input("Quantidade Padrão", 1, 500, 50) # Ajustado para 50
     lista_sangrias = ["2mm", "3mm", "5mm", "7mm", "9mm"]
-    b_sangria = st.selectbox("Sangria Padrão", lista_sangrias, index=4) # 9mm por padrão
+    b_sangria = st.selectbox("Sangria Padrão", lista_sangrias, index=4)
     
     if st.button("🔄 Aplicar a Todos"):
         for i in range(len(st.session_state.galeria)):
@@ -129,8 +129,7 @@ with st.sidebar:
             st.session_state[f"s{i}"] = b_sangria
         st.rerun()
 
-    st.divider()
-    if st.button("🗑️ Limpar Galeria Completa"):
+    if st.button("🗑️ Limpar Galeria"):
         st.session_state.galeria = []
         st.rerun()
 
@@ -141,54 +140,38 @@ if u:
         if f.name not in [img['name'] for img in st.session_state.galeria]:
             st.session_state.galeria.append({"name": f.name, "img": Image.open(f)})
 
-# Lista de Configurações das Imagens
+# Configurações Individuais
 if st.session_state.galeria:
     confs = []
     idx_para_remover = None
-
     for i, item in enumerate(st.session_state.galeria):
         with st.expander(f"📦 {item['name']}", expanded=True):
             c1, c2, c3, c4 = st.columns([1, 2, 2, 0.5])
-            with c1: 
-                st.image(item['img'], width=80)
+            with c1: st.image(item['img'], width=80)
             with c2:
-                # Recupera valores do session_state ou usa padrão
-                v_med = st.session_state.get(f"m{i}", 5.0)
-                v_qtd = st.session_state.get(f"q{i}", 1)
-                med = st.number_input(f"Tamanho (cm)", 1.0, 25.0, key=f"m{i}", value=float(v_med))
-                qtd = st.number_input(f"Quantidade", 1, 100, key=f"q{i}", value=int(v_qtd))
+                med = st.number_input(f"Tamanho (cm)", 1.0, 25.0, key=f"m{i}", value=float(st.session_state.get(f"m{i}", 4.0)))
+                qtd = st.number_input(f"Quantidade", 1, 500, key=f"q{i}", value=int(st.session_state.get(f"q{i}", 50)))
             with c3:
                 tipo = st.selectbox("Corte", ["Com Sangria", "Corte no Desenho (0mm)"], key=f"t{i}")
-                # Recupera sangria do session_state
                 v_sang = st.session_state.get(f"s{i}", "9mm")
                 idx_s = lista_sangrias.index(v_sang) if v_sang in lista_sangrias else 4
                 sang = st.selectbox("Sangria", lista_sangrias, index=idx_s, key=f"s{i}")
                 lin = st.checkbox("Linha Preta", True, key=f"l{i}")
             with c4:
-                # Botão para remover esta imagem específica
-                if st.button("❌", key=f"del{i}"):
-                    idx_para_remover = i
-            
+                if st.button("❌", key=f"del{i}"): idx_para_remover = i
             confs.append({'img': item['img'], 'medida_cm': med, 'quantidade': qtd, 'tipo': tipo, 'sangria_val': sang, 'linha': lin})
 
-    # Executa a remoção se o botão X foi clicado
     if idx_para_remover is not None:
         st.session_state.galeria.pop(idx_para_remover)
-        # Limpa as chaves de input da imagem removida para não poluir a memória
-        for prefix in ["m", "q", "s", "t", "l"]:
-            if f"{prefix}{idx_para_remover}" in st.session_state:
-                del st.session_state[f"{prefix}{idx_para_remover}"]
         st.rerun()
 
-    # Gerar PDF
     st.divider()
     if st.button("🚀 GERAR PDF FINAL", use_container_width=True):
-        with st.spinner("Centralizando e processando páginas..."):
+        with st.spinner("Gerando layout preciso..."):
             folhas = montar_projeto(confs, margem, suavidade, espessura_linha)
             if folhas:
-                for idx, f in enumerate(folhas): 
-                    st.image(f, caption=f"Página {idx+1}", use_container_width=True)
-                
+                for idx, f in enumerate(folhas): st.image(f, caption=f"Página {idx+1}", use_container_width=True)
                 pdf_bytes = io.BytesIO()
+                # Crucial: Salvar em 300 DPI reais para garantir os 4cm 
                 folhas[0].save(pdf_bytes, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-                st.download_button("📥 Baixar PDF Centralizado", pdf_bytes.getvalue(), "Bazzott_Lovs_Editor.pdf", use_container_width=True)
+                st.download_button("📥 Baixar PDF Preciso", pdf_bytes.getvalue(), "Bazzott_Lovs_Editor.pdf", use_container_width=True)
