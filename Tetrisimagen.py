@@ -20,7 +20,9 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
     if tipo_contorno == "Sem Contorno":
         return img, img.split()[3].point(lambda p: 255 if p > 100 else 0)
 
-    val_cm = 0.05 if tipo_contorno == "Corte no Desenho (0mm)" else float(sangria_escolhida.replace('mm', '')) / 10
+    # Converte mm para cm. Suporta "2.5mm", "3mm", etc.
+    val_mm = float(sangria_escolhida.replace('mm', '').replace(',', '.'))
+    val_cm = 0.05 if tipo_contorno == "Corte no Desenho (0mm)" else val_mm / 10
     p_px = int(val_cm * CM_TO_PX)
     
     fator = 0.5
@@ -115,9 +117,11 @@ def montar_projeto(lista_config, margem_cm, modo_layout, nivel_suavidade):
 # --- INTERFACE ---
 st.set_page_config(page_title="ScanNCut Studio Pro", layout="wide")
 
-# Inicialização da galeria na sessão para evitar perda de dados
 if 'galeria' not in st.session_state:
     st.session_state.galeria = []
+
+# Opções de sangria atualizadas com 2.5mm
+lista_mm = ["2.5mm", "3mm", "5mm", "7mm", "9mm"]
 
 with st.sidebar:
     st.header("1. Configurações Globais")
@@ -129,7 +133,6 @@ with st.sidebar:
     st.header("2. Sincronização em Massa")
     b_size = st.number_input("Tamanho Padrão (cm)", 1.0, 25.0, 5.0)
     b_qtd = st.number_input("Quantidade Padrão", 1, 100, 10)
-    lista_mm = ["3mm", "5mm", "7mm", "9mm"]
     b_sangria = st.selectbox("Sangria Padrão (mm)", lista_mm, index=0)
     
     if st.button("🪄 Sincronizar Tudo"):
@@ -156,8 +159,7 @@ if st.session_state.galeria:
                 qtd = st.number_input(f"Qtd", 1, 100, key=f"q{i}", value=st.session_state.get(f"q{i}", 10))
             with c3:
                 tipo = st.selectbox("Corte", ["Com Sangria", "Corte no Desenho (0mm)"], key=f"t{i}")
-                # Recupera o index correto da sangria sincronizada
-                val_s = st.session_state.get(f"s{i}", "3mm")
+                val_s = st.session_state.get(f"s{i}", "2.5mm")
                 idx_s = lista_mm.index(val_s) if val_s in lista_mm else 0
                 sang = st.selectbox("mm", lista_mm, key=f"s{i}", index=idx_s)
                 lin = st.checkbox("Linha Preta", True, key=f"l{i}")
@@ -170,4 +172,3 @@ if st.session_state.galeria:
             out = io.BytesIO()
             folhas[0].save(out, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
             st.download_button("📥 Baixar PDF Final", out.getvalue(), "projeto_scanncut.pdf", use_container_width=True)
-        
