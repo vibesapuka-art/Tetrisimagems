@@ -23,7 +23,7 @@ def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_sua
     dist_px = int(sangria_cm * CM_TO_PX)
     
     if dist_px > 0:
-        padding = dist_px + 20 # Reduzido para economizar espaço
+        padding = dist_px + 20
         canvas_alpha = Image.new("L", (img.width + padding*2, img.height + padding*2), 0)
         canvas_alpha.paste(img.split()[3], (padding, padding))
         mask = canvas_alpha.filter(ImageFilter.MaxFilter(tornar_impar(dist_px)))
@@ -52,7 +52,6 @@ def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_sua
 
 def montar_folhas(pecas, margem_cm):
     m_px = int(margem_cm * CM_TO_PX)
-    # Espaçamento entre etiquetas reduzido para 1mm para ganho de espaço
     e_px = int(0.1 * CM_TO_PX) 
     
     folhas = []
@@ -65,13 +64,11 @@ def montar_folhas(pecas, margem_cm):
         
         for i, p in enumerate(lista_pendente):
             pw, ph = p.size
-            # Verifica se cabe na largura considerando a margem exata
             if x + pw > A4_WIDTH - m_px:
                 x = m_px
                 y += h_linha + e_px
                 h_linha = 0
             
-            # Verifica se cabe na altura
             if y + ph <= A4_HEIGHT - m_px:
                 folha.paste(p, (x, y), p)
                 x += pw + e_px
@@ -83,7 +80,6 @@ def montar_folhas(pecas, margem_cm):
         if not inseridos: break
         for idx in sorted(inseridos, reverse=True): lista_pendente.pop(idx)
         
-        # Converte para RGB (Fundo Branco) mantendo a escala
         f_branca = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
         f_branca.paste(folha, (0, 0), folha)
         folhas.append(f_branca)
@@ -91,19 +87,18 @@ def montar_folhas(pecas, margem_cm):
     return folhas
 
 # --- INTERFACE ---
-st.set_page_config(page_title="Bazzott Lov´s Studio Otimizado", layout="wide")
+st.set_page_config(page_title="Bazzott Lov´s Editor", layout="wide")
 
 if 'galeria' not in st.session_state:
     st.session_state.galeria = []
 
 with st.sidebar:
-    st.header("⚙️ Ajustes Finos")
-    # Reduzi o padrão para 0.5cm como sugerido
-    margem = st.slider("Margem da Folha (cm)", 0.3, 1.5, 0.5)
+    st.header("⚙️ Ajustes de Margem")
+    margem = st.slider("Margem da Folha (cm)", 0.3, 1.5, 0.5, help="Diminua para encaixar mais figuras nas bordas.")
     suave = st.slider("Suavização", 0, 30, 15)
     
     st.divider()
-    st.header("🪄 Massa")
+    st.header("🪄 Ajuste em Massa")
     b_tam = st.number_input("Tam (cm)", 1.0, 25.0, 4.0)
     b_qtd = st.number_input("Qtd", 1, 500, 20)
     b_san = st.slider("Sangria (cm)", 0.0, 1.0, 0.25, step=0.05)
@@ -115,7 +110,7 @@ with st.sidebar:
             st.session_state[f"s{i}"] = b_san
         st.rerun()
 
-u = st.file_uploader("PNGs", type="png", accept_multiple_files=True)
+u = st.file_uploader("Subir PNGs", type="png", accept_multiple_files=True)
 if u:
     for f in u:
         if f.name not in [img['name'] for img in st.session_state.galeria]:
@@ -124,13 +119,13 @@ if u:
 if st.session_state.galeria:
     pecas_preparadas = []
     total_figuras = 0
-    indices_para_remover = []
+    indices_remover = []
 
     for i, item in enumerate(st.session_state.galeria):
-        with st.expander(f"Config: {item['name']}", expanded=True):
+        with st.expander(f"Configurar: {item['name']}", expanded=True):
             c_del, c1, c2, c3 = st.columns([0.1, 0.9, 2, 2])
             with c_del:
-                if st.button("❌", key=f"del_{i}"): indices_para_remover.append(i)
+                if st.button("❌", key=f"del_{i}"): indices_remover.append(i)
             with c1: st.image(item['img'], width=60)
             with c2:
                 t = st.number_input("cm", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
@@ -144,14 +139,20 @@ if st.session_state.galeria:
                 pecas_preparadas.append(p)
                 total_figuras += 1
 
-    if indices_para_remover:
-        for idx in sorted(indices_para_remover, reverse=True): st.session_state.galeria.pop(idx)
+    if indices_remover:
+        for idx in sorted(indices_remover, reverse=True): st.session_state.galeria.pop(idx)
         st.rerun()
 
-    if st.button(f"🚀 GERAR PDF ({total_figuras} figuras)", use_container_width=True):
+    if st.button(f"🚀 GERAR E VISUALIZAR ({total_figuras} figuras)", use_container_width=True):
         folhas = montar_folhas(pecas_preparadas, margem)
         if folhas:
-            st.success(f"PDF Gerado! {total_figuras} figuras em {len(folhas)} página(s).")
+            st.subheader("🖼️ Pré-visualização das Páginas")
+            # Mostra as imagens na tela antes do botão de download 
+            for idx, f in enumerate(folhas):
+                st.image(f, caption=f"Página {idx+1} - Verifique o encaixe nas bordas", use_container_width=True)
+            
             pdf_bytes = io.BytesIO()
             folhas[0].save(pdf_bytes, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-            st.download_button("📥 Baixar Agora", pdf_bytes.getvalue(), "Bazzott_Otimizado.pdf", use_container_width=True)
+            
+            st.divider()
+            st.download_button("📥 BAIXAR PDF FINAL", pdf_bytes.getvalue(), "Bazzott_Lovs_Editor.pdf", use_container_width=True)
