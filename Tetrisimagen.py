@@ -120,7 +120,7 @@ def montar_projeto(lista_config, margem_cm, nivel_suavidade, espessura_linha):
 st.set_page_config(page_title="Bazzott Art Editor", layout="wide")
 
 # Título visual na tela
-st.title("✂️ Bazzott Lov´s Editor")
+st.title("✂️ Bazzott Art Editor")
 
 with st.sidebar:
     st.header("1. Ajustes Globais")
