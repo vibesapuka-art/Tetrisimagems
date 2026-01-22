@@ -7,31 +7,43 @@ A4_WIDTH, A4_HEIGHT = 2480, 3508
 CM_TO_PX = 118.11 
 
 def tornar_impar(n):
+    """Garante que o valor seja ímpar para filtros PIL."""
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-# --- FUNÇÃO PARA GERAR TEXTO ---
+# --- FUNÇÃO PARA GERAR TEXTO COMO IMAGEM ---
 def texto_para_imagem(texto, cor_hex):
+    # Criamos uma tela larga para o texto
     img_texto = Image.new("RGBA", (2500, 600), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img_texto)
+    
     try:
+        # Tenta carregar uma fonte do sistema (variável conforme o SO)
+        # Em produção, o ideal é ter um arquivo .ttf na pasta do app
         font = ImageFont.load_default() 
     except:
         font = ImageFont.load_default()
 
+    # Renderiza o texto
     draw.text((20, 20), texto, fill=cor_hex, font=font)
+    
+    # Corta a transparência e aumenta a resolução para ficar nítido no motor
     bbox = img_texto.getbbox()
     if bbox:
         img_texto = img_texto.crop(bbox)
+        # Upscale para manter a qualidade igual aos PNGs importados
         img_texto = img_texto.resize((img_texto.width * 6, img_texto.height * 6), Image.LANCZOS)
+    
     return img_texto
 
-# --- MOTOR DE PROCESSAMENTO ---
+# --- MOTOR DE PROCESSAMENTO (BORDA E CORTE) ---
 def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa, nivel_suavidade, espessura_linha_mm):
     bbox_original = img.getbbox()
-    if bbox_original: img = img.crop(bbox_original)
+    if bbox_original:
+        img = img.crop(bbox_original)
     img = img.convert("RGBA")
 
+    # Cálculo de pixels
     if tipo_contorno == "Corte no Desenho (0mm)":
         distancia_px = 2 
     else:
@@ -39,6 +51,8 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
         distancia_px = int((num_mm / 10) * CM_TO_PX)
     
     linha_px = int((espessura_linha_mm / 10) * CM_TO_PX)
+    
+    # Processamento otimizado
     fator = 0.5 
     img_s = img.resize((int(img.width * fator), int(img.height * fator)), Image.LANCZOS)
     p_px_s = int(distancia_px * fator)
@@ -48,12 +62,16 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
     alpha_base = Image.new("L", (img_s.width + respiro, img_s.height + respiro), 0)
     alpha_base.paste(img_s.split()[3], (respiro // 2, respiro // 2))
     
+    # Máscara da Sangria (Branca)
     mask = alpha_base.filter(ImageFilter.MaxFilter(tornar_impar(p_px_s)))
     if nivel_suavidade > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(radius=nivel_suavidade * fator))
         mask = mask.point(lambda p: 255 if p > 128 else 0)
 
+    # Máscara da Linha (Preta - Stroke)
     mask_linha = mask.filter(ImageFilter.MaxFilter(tornar_impar(l_px_s if l_px_s > 0 else 1)))
+
+    # Upscale final
     mask_f = mask.resize((img.width + distancia_px*2 + 200, img.height + distancia_px*2 + 200), Image.LANCZOS)
     mask_f = mask_f.point(lambda p: 255 if p > 128 else 0)
     mask_l_f = mask_linha.resize(mask_f.size, Image.LANCZOS)
@@ -76,18 +94,21 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
 
     return final_rgba.crop(final_rgba.getbbox()), mask_f.crop(final_rgba.getbbox())
 
-# --- MONTAGEM DA FOLHA ---
+# --- MONTAGEM DO PDF ---
 def montar_projeto(lista_config, margem_cm, nivel_suavidade, espessura_linha):
     m_px = int(margem_cm * CM_TO_PX)
     e_px = int(0.20 * CM_TO_PX)
     all_pieces = []
+    
     for item in lista_config:
         img_base = item['img'].convert("RGBA")
         alvo_px = item['medida_cm'] * CM_TO_PX
         w, h = img_base.size
         img_res = img_base.resize((int(w*(alvo_px/h)), int(alvo_px)) if h>w else (int(alvo_px), int(h*(alvo_px/w))), Image.LANCZOS)
-        pv, _ = gerar_contorno_individual(img_res, item['tipo'], item['sangria_val'], item['linha'], nivel_suavidade, espessura_linha)
-        for _ in range(item['quantidade']): all_pieces.append(pv)
+        
+        pv, pm = gerar_contorno_individual(img_res, item['tipo'], item['sangria_val'], item['linha'], nivel_suavidade, espessura_linha)
+        for _ in range(item['quantidade']): 
+            all_pieces.append(pv)
 
     folhas = []
     pecas_restantes = all_pieces.copy()
@@ -97,11 +118,13 @@ def montar_projeto(lista_config, margem_cm, nivel_suavidade, espessura_linha):
         ainda_cabem = []
         for p in pecas_restantes:
             iw, ih = p.size
-            if cx + iw > A4_WIDTH - m_px: cx, cy, lh = m_px, cy + lh + e_px, 0
+            if cx + iw > A4_WIDTH - m_px:
+                cx, cy, lh = m_px, cy + lh + e_px, 0
             if cy + ih <= A4_HEIGHT - m_px:
                 temp_canvas.paste(p, (cx, cy), p)
                 cx, lh = cx + iw + e_px, max(lh, ih)
             else: ainda_cabem.append(p)
+
         if temp_canvas.getbbox():
             final_page = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
             final_page.paste(temp_canvas, (0, 0), temp_canvas)
@@ -110,66 +133,59 @@ def montar_projeto(lista_config, margem_cm, nivel_suavidade, espessura_linha):
     return folhas
 
 # --- INTERFACE ---
-st.set_page_config(page_title="ScanNCut Studio Pro v3", layout="wide")
+st.set_page_config(page_title="ScanNCut Pro v3", layout="wide")
 
 if 'lista_imgs' not in st.session_state:
     st.session_state.lista_imgs = []
 
-st.title("✂️ ScanNCut Pro - Editor Studio")
-
-# CRIAÇÃO DAS ABAS
-tab_layout, tab_texto = st.tabs(["🖼️ Galeria & Layout", "🔠 Editor de Fontes"])
+st.title("✂️ ScanNCut Pro - Edição & Texto")
 
 with st.sidebar:
-    st.header("⚙️ Configurações Globais")
-    espessura_linha = st.slider("Espessura da Linha (mm)", 0.1, 10.0, 0.3, step=0.1)
+    st.header("🔡 Gerador de Texto")
+    txt_input = st.text_input("Texto para corte")
+    cor_txt = st.color_picker("Cor", "#000000")
+    if st.button("➕ Adicionar Texto"):
+        if txt_input:
+            st.session_state.lista_imgs.append({"img": texto_para_imagem(txt_input, cor_txt), "name": f"Texto: {txt_input}"})
+
+    st.divider()
+    st.header("⚙️ Configurações Padrão")
+    # VALORES SOLICITADOS: Linha 0.3mm e Suavidade 30
+    espessura_linha = st.slider("Linha de Corte (mm)", 0.1, 5.0, 0.3, step=0.1)
     suavidade = st.slider("Arredondamento", 0, 30, 30)
     margem = st.slider("Margem Papel (cm)", 0.5, 2.5, 1.0)
-    if st.button("🗑️ Limpar Tudo"):
+
+    if st.button("🗑️ Limpar Projeto"):
         st.session_state.lista_imgs = []
         st.rerun()
 
-# ABA DE TEXTO (O NOVO EDITOR)
-with tab_texto:
-    st.subheader("🎨 Estúdio de Texto")
-    col_t1, col_t2 = st.columns([2, 1])
-    with col_t1:
-        txt_input = st.text_area("Digite seu texto aqui (Nomes, frases, datas...)", placeholder="Ex: Maria Eduarda")
-    with col_t2:
-        cor_txt = st.color_picker("Cor do Texto", "#000000")
-        if st.button("✨ Gerar e Adicionar ao Projeto", use_container_width=True):
-            if txt_input:
-                st.session_state.lista_imgs.append({"img": texto_para_imagem(txt_input, cor_txt), "name": f"Texto: {txt_input[:15]}"})
-                st.success("Texto adicionado à Galeria!")
+u = st.file_uploader("Arraste seus PNGs aqui", type="png", accept_multiple_files=True)
+if u:
+    for f in u:
+        if not any(d.get('name') == f.name for d in st.session_state.lista_imgs):
+            st.session_state.lista_imgs.append({"img": Image.open(f), "name": f.name})
 
-# ABA DE GALERIA E LAYOUT
-with tab_layout:
-    u = st.file_uploader("Upload de PNGs", type="png", accept_multiple_files=True)
-    if u:
-        for f in u:
-            if not any(d.get('name') == f.name for d in st.session_state.lista_imgs):
-                st.session_state.lista_imgs.append({"img": Image.open(f), "name": f.name})
+if st.session_state.lista_imgs:
+    confs = []
+    st.subheader("Itens no Projeto")
+    for i, item in enumerate(st.session_state.lista_imgs):
+        with st.expander(f"📦 {item['name']}", expanded=True):
+            c1, c2, c3 = st.columns([1, 2, 2])
+            with c1: st.image(item['img'], width=100)
+            with c2:
+                med = st.number_input(f"Tamanho (cm)", 1.0, 25.0, 5.0, key=f"m{i}")
+                # QUANTIDADE PADRÃO 1
+                qtd = st.number_input(f"Qtd", 1, 100, 1, key=f"q{i}")
+            with c3:
+                tipo = st.selectbox("Estilo", ["Com Sangria", "Corte no Desenho (0mm)"], key=f"t{i}")
+                sang = st.selectbox("Sangria", ["2mm", "3mm", "5mm", "7mm", "9mm"], index=0, key=f"s{i}")
+                lin = st.checkbox("Linha de Corte", True, key=f"l{i}")
+            confs.append({'img': item['img'], 'medida_cm': med, 'quantidade': qtd, 'tipo': tipo, 'sangria_val': sang, 'linha': lin})
 
-    if st.session_state.lista_imgs:
-        confs = []
-        st.divider()
-        for i, item in enumerate(st.session_state.lista_imgs):
-            with st.expander(f"📦 {item['name']}", expanded=True):
-                c1, c2, c3 = st.columns([1, 2, 2])
-                with c1: st.image(item['img'], width=120)
-                with c2:
-                    med = st.number_input(f"Tamanho (cm)", 1.0, 25.0, 5.0, key=f"m{i}")
-                    qtd = st.number_input(f"Quantidade", 1, 100, 1, key=f"q{i}")
-                with c3:
-                    tipo = st.selectbox("Corte", ["Com Sangria", "Corte no Desenho (0mm)"], key=f"t{i}")
-                    sang = st.selectbox("Sangria", ["2mm", "3mm", "5mm", "7mm", "9mm"], index=0, key=f"s{i}")
-                    lin = st.checkbox("Linha Preta", True, key=f"l{i}")
-                confs.append({'img': item['img'], 'medida_cm': med, 'quantidade': qtd, 'tipo': tipo, 'sangria_val': sang, 'linha': lin})
-
-        if st.button("🚀 GERAR PDF FINAL", use_container_width=True):
-            folhas = montar_projeto(confs, margem, suavidade, espessura_linha)
-            if folhas:
-                for idx, f in enumerate(folhas): st.image(f, caption=f"Página {idx+1}", use_container_width=True)
-                pdf_output = io.BytesIO()
-                folhas[0].save(pdf_output, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-                st.download_button("📥 Baixar PDF", pdf_output.getvalue(), "projeto.pdf", use_container_width=True)
+    if st.button("🚀 GERAR PDF PARA IMPRESSÃO"):
+        folhas = montar_projeto(confs, margem, suavidade, espessura_linha)
+        if folhas:
+            for idx, f in enumerate(folhas): st.image(f, caption=f"Página {idx+1}", use_container_width=True)
+            out = io.BytesIO()
+            folhas[0].save(out, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
+            st.download_button("📥 Baixar PDF 300DPI", out.getvalue(), "projeto_final.pdf", use_container_width=True)
