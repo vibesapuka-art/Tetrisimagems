@@ -11,8 +11,9 @@ def tornar_impar(n):
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-# --- MOTOR DE PROCESSAMENTO (IMAGEM NA FRENTE DA SANGRIA) ---
+# --- MOTOR DE PROCESSAMENTO (IMAGEM NO TOPO ABSOLUTO) ---
 def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa, nivel_suavidade):
+    # Foca na área visível da imagem original
     bbox_original = img.getbbox()
     if bbox_original:
         img = img.crop(bbox_original)
@@ -21,11 +22,11 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
         alpha = img.split()[3].point(lambda p: 255 if p > 100 else 0)
         return img, alpha
 
-    # Lógica da espessura: 1mm tagredonda = 2.50mm total
+    # Lógica da espessura: 1mm tagredonda = 2.50mm total de segurança
     if tipo_contorno == "Corte no Desenho (0mm)":
         p_px = 6
     elif sangria_escolhida == "1mm tagredonda":
-        p_px = int(0.25 * CM_TO_PX)
+        p_px = int(0.25 * CM_TO_PX) # 2.5mm reais
     else:
         num_mm = float(sangria_escolhida.split('mm')[0])
         p_px = int((num_mm / 10) * CM_TO_PX)
@@ -35,6 +36,7 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
     p_px_s = int(p_px * fator)
     respiro = p_px_s * 2 + 120
     
+    # Criar máscara para a sangria
     img_exp = Image.new("RGBA", (img_s.width + respiro, img_s.height + respiro), (0, 0, 0, 0))
     img_exp.paste(img_s, (respiro // 2, respiro // 2))
     
@@ -45,31 +47,34 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
         mask = mask.filter(ImageFilter.GaussianBlur(radius=nivel_suavidade * fator))
         mask = mask.point(lambda p: 255 if p > 128 else 0)
 
+    # Tamanho final da peça processada
     mask_f = mask.resize((img.width + p_px*2 + 150, img.height + p_px*2 + 150), Image.LANCZOS)
     mask_f = mask_f.point(lambda p: 255 if p > 128 else 0)
 
-    # MONTAGEM DAS CAMADAS (Imagem na frente)
-    nova_img = Image.new("RGBA", mask_f.size, (0, 0, 0, 0))
+    # --- MONTAGEM POR CAMADAS (A IMAGEM NÃO PODE FICAR ATRÁS) ---
+    # 1. Base transparente
+    final_img = Image.new("RGBA", mask_f.size, (0, 0, 0, 0))
     
-    # 1. Coloca a Sangria (Branco) por baixo
-    nova_img.paste((255,255,255,255), (0,0), mask_f)
+    # 2. Camada Inferior: Sangria (Fundo Branco)
+    sangria_branca = Image.new("RGBA", mask_f.size, (255, 255, 255, 255))
+    final_img.paste(sangria_branca, (0, 0), mask_f)
     
-    # 2. Coloca a Imagem Original por cima da sangria
-    pos_x = (nova_img.width - img.width) // 2
-    pos_y = (nova_img.height - img.height) // 2
-    nova_img.paste(img, (pos_x, pos_y), img)
+    # 3. Camada Superior: O teu desenho (Colado por cima do branco)
+    pos_x = (final_img.width - img.width) // 2
+    pos_y = (final_img.height - img.height) // 2
+    final_img.paste(img, (pos_x, pos_y), img)
 
-    # 3. Coloca a Linha de Corte por cima de tudo
+    # 4. Camada de Contorno: Linha de Corte Preta (Topo de tudo)
     if linha_ativa:
         overlay_linha = Image.new("RGBA", mask_f.size, (0, 0, 0, 0))
-        borda_guia = mask_f.filter(ImageFilter.MaxFilter(5))
+        borda_guia = mask_f.filter(ImageFilter.MaxFilter(3)) # Linha fina e nítida
         overlay_linha.paste((0,0,0,255), (0,0), borda_guia)
-        nova_img = Image.alpha_composite(nova_img, overlay_linha)
+        final_img = Image.alpha_composite(final_img, overlay_linha)
     
-    final_bbox = nova_img.getbbox()
-    return nova_img.crop(final_bbox), mask_f.crop(final_bbox)
+    final_bbox = final_img.getbbox()
+    return final_img.crop(final_bbox), mask_f.crop(final_bbox)
 
-# --- MONTAGEM DO PROJETO ---
+# --- MONTAGEM DO PROJETO E CENTRALIZAÇÃO ---
 def montar_projeto(lista_config, margem_cm, modo_layout, nivel_suavidade):
     m_px = int(margem_cm * CM_TO_PX)
     e_px = int(0.15 * CM_TO_PX)
@@ -128,13 +133,13 @@ def montar_projeto(lista_config, margem_cm, modo_layout, nivel_suavidade):
 
 # --- INTERFACE ---
 st.set_page_config(page_title="ScanNCut Studio Pro", layout="wide")
-st.title("✂️ ScanNCut Pro - Versão Final")
+st.title("✂️ ScanNCut Pro - Atualizado")
 
 with st.sidebar:
-    st.header("Configurações Gerais")
+    st.header("Configurações")
     suavidade = st.slider("Arredondamento", 0, 30, 15)
     modo_layout = st.radio("Layout", ["Modo Linhas", "Modo Tetris"])
-    margem = st.slider("Margem (cm)", 0.3, 2.0, 1.0)
+    margem = st.slider("Margem Papel (cm)", 0.3, 2.0, 1.0)
     
     st.divider()
     st.header("🪄 Sincronizar Tudo")
