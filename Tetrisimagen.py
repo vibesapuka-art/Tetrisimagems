@@ -4,18 +4,15 @@ import io
 import random
 
 # --- CONFIGURAÇÕES TÉCNICAS ---
-# Definição de 300 DPI para garantir precisão na ScanNCut
 A4_WIDTH, A4_HEIGHT = 2480, 3508
 CM_TO_PX = 118.11 
 
 def tornar_impar(n):
-    """Garante que o valor para filtros seja ímpar."""
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-# --- MOTOR DE PROCESSAMENTO DE IMAGEM (CONTORNO E SUAVIZAÇÃO) ---
+# --- MOTOR DE PROCESSAMENTO (SANGRIA E LINHA À FRENTE) ---
 def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa, nivel_suavidade):
-    # Foca na área visível da imagem
     bbox_original = img.getbbox()
     if bbox_original:
         img = img.crop(bbox_original)
@@ -24,16 +21,15 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
         alpha = img.split()[3].point(lambda p: 255 if p > 100 else 0)
         return img, alpha
 
-    # Lógica da espessura baseada na escolha do utilizador
+    # Define a espessura da sangria em pixels
     if tipo_contorno == "Corte no Desenho (0mm)":
         p_px = 6
     else:
-        # Extrai o número do texto (ex: "1mm tagredonda" vira 0.1cm)
+        # Pega o valor numérico da opção (ex: "1mm tagredonda" -> 1.0)
         num_mm = float(sangria_escolhida.split('mm')[0])
-        valor_cm = num_mm / 10
-        p_px = int(valor_cm * CM_TO_PX)
+        p_px = int((num_mm / 10) * CM_TO_PX)
     
-    # Processamento em escala (Anti-Aliasing) para bordas perfeitas
+    # Processamento em escala para suavização (Anti-aliasing)
     fator = 0.5
     img_s = img.resize((int(img.width * fator), int(img.height * fator)), Image.LANCZOS)
     p_px_s = int(p_px * fator)
@@ -44,35 +40,39 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
     
     alpha = img_exp.split()[3].point(lambda p: 255 if p > 100 else 0)
     
-    # Cria a expansão (Sangria)
+    # Gera a máscara expandida da sangria
     mask = alpha.filter(ImageFilter.MaxFilter(tornar_impar(p_px_s)))
     
-    # SUAVIZAÇÃO: O segredo para não ficar "quadrado"
     if nivel_suavidade > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(radius=nivel_suavidade * fator))
         mask = mask.point(lambda p: 255 if p > 128 else 0)
 
-    # Redimensiona para o tamanho original com alta qualidade
+    # Redimensiona para o tamanho original
     mask_f = mask.resize((img.width + p_px*2 + 150, img.height + p_px*2 + 150), Image.LANCZOS)
     mask_f = mask_f.point(lambda p: 255 if p > 128 else 0)
 
-    nova_img = Image.new("RGBA", mask_f.size, (0, 0, 0, 0))
+    # Cria a base final com fundo branco onde a máscara atua
+    nova_img = Image.new("RGBA", mask_f.size, (255, 255, 255, 255))
+    nova_img.putalpha(mask_f)
     
-    # Linha preta de corte (guia para a lâmina)
-    if linha_ativa:
-        borda_guia = mask_f.filter(ImageFilter.MaxFilter(5))
-        nova_img.paste((0,0,0,255), (0,0), borda_guia)
-    
-    # Preenche com fundo branco e sobrepõe o desenho original
-    nova_img.paste((255,255,255,255), (0,0), mask_f)
-    pos_x = (nova_img.width - img.width) // 2
-    pos_y = (nova_img.height - img.height) // 2
+    # Centraliza a imagem original dentro da área de sangria
+    pos_x = (mask_f.width - img.width) // 2
+    pos_y = (mask_f.height - img.height) // 2
     nova_img.paste(img, (pos_x, pos_y), img)
+
+    # LINHA DE CORTE À FRENTE (Garante visibilidade para a máquina)
+    if linha_ativa:
+        overlay_linha = Image.new("RGBA", mask_f.size, (0, 0, 0, 0))
+        # Cria um traço preto fino no limite da máscara
+        borda_guia = mask_f.filter(ImageFilter.MaxFilter(5))
+        overlay_linha.paste((0,0,0,255), (0,0), borda_guia)
+        # Sobrepõe a linha ao desenho
+        nova_img = Image.alpha_composite(nova_img, overlay_linha)
     
     final_bbox = nova_img.getbbox()
     return nova_img.crop(final_bbox), mask_f.crop(final_bbox)
 
-# --- LÓGICA DE MONTAGEM E CENTRALIZAÇÃO ---
+# --- LÓGICA DE MONTAGEM E CENTRALIZAÇÃO NA FOLHA ---
 def montar_projeto(lista_config, margem_cm, modo_layout, nivel_suavidade):
     m_px = int(margem_cm * CM_TO_PX)
     e_px = int(0.15 * CM_TO_PX)
@@ -82,7 +82,6 @@ def montar_projeto(lista_config, margem_cm, modo_layout, nivel_suavidade):
         img_base = item['img'].convert("RGBA")
         alvo_px = item['medida_cm'] * CM_TO_PX
         w, h = img_base.size
-        # Redimensionamento proporcional
         img_res = img_base.resize((int(w*(alvo_px/h)), int(alvo_px)) if h>w else (int(alvo_px), int(h*(alvo_px/w))), Image.LANCZOS)
         
         pv, pm = gerar_contorno_individual(img_res, item['tipo'], item['sangria_val'], item['linha'], nivel_suavidade)
@@ -121,30 +120,29 @@ def montar_projeto(lista_config, margem_cm, modo_layout, nivel_suavidade):
                         encaixou = True; break
                 if not encaixou: ainda_cabem.append(p)
 
-        # CENTRALIZAÇÃO AUTOMÁTICA NA FOLHA
+        # CENTRALIZAÇÃO FINAL NO A4
         bbox = temp_canvas.getbbox()
         if bbox:
             final_page = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
-            l_real, a_real = bbox[2]-bbox[0], bbox[3]-bbox[1]
-            off_x = (A4_WIDTH - l_real) // 2 - bbox[0]
-            off_y = (A4_HEIGHT - a_real) // 2 - bbox[1]
+            l_r, a_r = bbox[2]-bbox[0], bbox[3]-bbox[1]
+            off_x = (A4_WIDTH - l_r) // 2 - bbox[0]
+            off_y = (A4_HEIGHT - a_r) // 2 - bbox[1]
             final_page.paste(temp_canvas, (off_x, off_y), temp_canvas)
             folhas.append(final_page)
-        
         pecas_restantes = ainda_cabem
     return folhas
 
-# --- INTERFACE ---
+# --- INTERFACE STREAMLIT ---
 st.set_page_config(page_title="ScanNCut Fast Pro", layout="wide")
 st.title("✂️ ScanNCut Pro")
 
 with st.sidebar:
-    st.header("Configurações Gerais")
-    suavidade = st.slider("Arredondamento", 0, 30, 15, help="Elimina o efeito quadrado das bordas.")
-    modo_layout = st.radio("Organização", ["Modo Linhas", "Modo Tetris"])
+    st.header("Configurações")
+    suavidade = st.slider("Arredondamento das Bordas", 0, 30, 15)
+    modo_layout = st.radio("Layout", ["Modo Linhas", "Modo Tetris"])
     margem = st.slider("Margem Papel (cm)", 0.3, 2.0, 1.0)
 
-u = st.file_uploader("Upload PNG", type="png", accept_multiple_files=True)
+u = st.file_uploader("Suba seus arquivos PNG", type="png", accept_multiple_files=True)
 if u:
     confs = []
     for i, f in enumerate(u):
@@ -154,12 +152,12 @@ if u:
             with c1: st.image(img, width=80)
             with c2:
                 med = st.number_input(f"Tamanho (cm)", 1.0, 25.0, 5.0, key=f"m{i}")
-                qtd = st.number_input(f"Quantidade", 1, 100, 10, key=f"q{i}")
+                qtd = st.number_input(f"Qtd", 1, 100, 10, key=f"q{i}")
             with c3:
-                tipo = st.selectbox("Tipo de Corte", ["Com Sangria", "Corte no Desenho (0mm)", "Sem Contorno"], key=f"t{i}")
-                # OPÇÃO DE 1MM TAGREDONDA ADICIONADA AQUI
-                sang = st.selectbox("Medida da Sangria", ["1mm tagredonda", "3mm", "5mm", "7mm", "9mm"], index=1, key=f"s{i}")
-                lin = st.checkbox("Linha Preta de Corte", True, key=f"l{i}")
+                tipo = st.selectbox("Corte", ["Com Sangria", "Corte no Desenho (0mm)", "Sem Contorno"], key=f"t{i}")
+                # Opção de 1mm integrada à lista
+                sang = st.selectbox("Sangria", ["1mm tagredonda", "3mm", "5mm", "7mm", "9mm"], index=0, key=f"s{i}")
+                lin = st.checkbox("Linha de Corte Visível", True, key=f"l{i}")
             confs.append({'img': img, 'medida_cm': med, 'quantidade': qtd, 'tipo': tipo, 'sangria_val': sang, 'linha': lin})
 
     if st.button("🚀 GERAR PROJETO CENTRALIZADO"):
@@ -168,4 +166,4 @@ if u:
             for idx, f in enumerate(folhas): st.image(f, caption=f"Página {idx+1}", use_container_width=True)
             out = io.BytesIO()
             folhas[0].save(out, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-            st.download_button("📥 Baixar PDF Final", out.getvalue(), "projeto_scanncut.pdf")
+            st.download_button("📥 Baixar PDF", out.getvalue(), "projeto_final.pdf")
