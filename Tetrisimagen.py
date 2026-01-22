@@ -11,7 +11,7 @@ def tornar_impar(n):
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-# --- INICIALIZAÇÃO DO BANCO DE DADOS TEMPORÁRIO (SESSION STATE) ---
+# --- INICIALIZAÇÃO DO ESTADO DA SESSÃO (MEMÓRIA PERSISTENTE) ---
 if 'galeria' not in st.session_state:
     st.session_state.galeria = []
 
@@ -64,7 +64,7 @@ def gerar_contorno_individual(img, tipo_contorno, sangria_escolhida, linha_ativa
     final_rgba = Image.alpha_composite(final_rgba, img_top)
     return final_rgba.crop(final_rgba.getbbox())
 
-# --- FUNÇÃO DE MONTAGEM NO A4 ---
+# --- FUNÇÃO DE MONTAGEM COM CENTRALIZAÇÃO ---
 def montar_projeto(lista_config, margem_cm, nivel_suavidade, espessura_linha):
     m_px, e_px = int(margem_cm * CM_TO_PX), int(0.15 * CM_TO_PX)
     all_pieces = []
@@ -84,14 +84,22 @@ def montar_projeto(lista_config, margem_cm, nivel_suavidade, espessura_linha):
         ainda_cabem = []
         for p in pecas_restantes:
             iw, ih = p.size
-            if cx + iw > A4_WIDTH - m_px: cx, cy, lh = m_px, cy + lh + e_px, 0
+            if cx + iw > A4_WIDTH - m_px:
+                cx, cy, lh = m_px, cy + lh + e_px, 0
             if cy + ih <= A4_HEIGHT - m_px:
                 temp_canvas.paste(p, (cx, cy), p)
                 cx, lh = cx + iw + e_px, max(lh, ih)
             else: ainda_cabem.append(p)
-        if temp_canvas.getbbox():
+        
+        # Centralização automática do bloco de imagens na folha
+        bbox = temp_canvas.getbbox()
+        if bbox:
             f_p = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
-            f_p.paste(temp_canvas, (0, 0), temp_canvas)
+            largura_conteudo = bbox[2] - bbox[0]
+            altura_conteudo = bbox[3] - bbox[1]
+            offset_x = (A4_WIDTH - largura_conteudo) // 2 - bbox[0]
+            offset_y = (A4_HEIGHT - altura_conteudo) // 2 - bbox[1]
+            f_p.paste(temp_canvas, (offset_x, offset_y), temp_canvas)
             folhas.append(f_p)
         pecas_restantes = ainda_cabem
     return folhas
@@ -122,42 +130,60 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    if st.button("🗑️ Limpar Galeria"):
+    if st.button("🗑️ Limpar Galeria Completa"):
         st.session_state.galeria = []
         st.rerun()
 
-# Área de Upload
+# Upload de arquivos
 u = st.file_uploader("Upload de arquivos PNG", type="png", accept_multiple_files=True)
 if u:
     for f in u:
-        # Só adiciona se o arquivo já não estiver na galeria para evitar duplicidade ao recarregar
         if f.name not in [img['name'] for img in st.session_state.galeria]:
             st.session_state.galeria.append({"name": f.name, "img": Image.open(f)})
 
-# Galeria de Configurações
+# Lista de Configurações das Imagens
 if st.session_state.galeria:
     confs = []
+    idx_para_remover = None
+
     for i, item in enumerate(st.session_state.galeria):
         with st.expander(f"📦 {item['name']}", expanded=True):
-            c1, c2, c3 = st.columns([1, 2, 2])
+            c1, c2, c3, c4 = st.columns([1, 2, 2, 0.5])
             with c1: 
                 st.image(item['img'], width=80)
             with c2:
-                med = st.number_input(f"Tamanho (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 5.0))
-                qtd = st.number_input(f"Quantidade", 1, 100, key=f"q{i}", value=st.session_state.get(f"q{i}", 1))
+                # Recupera valores do session_state ou usa padrão
+                v_med = st.session_state.get(f"m{i}", 5.0)
+                v_qtd = st.session_state.get(f"q{i}", 1)
+                med = st.number_input(f"Tamanho (cm)", 1.0, 25.0, key=f"m{i}", value=float(v_med))
+                qtd = st.number_input(f"Quantidade", 1, 100, key=f"q{i}", value=int(v_qtd))
             with c3:
                 tipo = st.selectbox("Corte", ["Com Sangria", "Corte no Desenho (0mm)"], key=f"t{i}")
-                # Busca o valor no session_state ou usa 9mm (index 4) como padrão inicial
-                idx_atual = lista_sangrias.index(st.session_state[f"s{i}"]) if f"s{i}" in st.session_state else 4
-                sang = st.selectbox("Sangria", lista_sangrias, index=idx_atual, key=f"s{i}")
+                # Recupera sangria do session_state
+                v_sang = st.session_state.get(f"s{i}", "9mm")
+                idx_s = lista_sangrias.index(v_sang) if v_sang in lista_sangrias else 4
+                sang = st.selectbox("Sangria", lista_sangrias, index=idx_s, key=f"s{i}")
                 lin = st.checkbox("Linha Preta", True, key=f"l{i}")
+            with c4:
+                # Botão para remover esta imagem específica
+                if st.button("❌", key=f"del{i}"):
+                    idx_para_remover = i
             
             confs.append({'img': item['img'], 'medida_cm': med, 'quantidade': qtd, 'tipo': tipo, 'sangria_val': sang, 'linha': lin})
 
-    # Botão de Processamento Final
+    # Executa a remoção se o botão X foi clicado
+    if idx_para_remover is not None:
+        st.session_state.galeria.pop(idx_para_remover)
+        # Limpa as chaves de input da imagem removida para não poluir a memória
+        for prefix in ["m", "q", "s", "t", "l"]:
+            if f"{prefix}{idx_para_remover}" in st.session_state:
+                del st.session_state[f"{prefix}{idx_para_remover}"]
+        st.rerun()
+
+    # Gerar PDF
     st.divider()
     if st.button("🚀 GERAR PDF FINAL", use_container_width=True):
-        with st.spinner("Gerando layout..."):
+        with st.spinner("Centralizando e processando páginas..."):
             folhas = montar_projeto(confs, margem, suavidade, espessura_linha)
             if folhas:
                 for idx, f in enumerate(folhas): 
@@ -165,4 +191,4 @@ if st.session_state.galeria:
                 
                 pdf_bytes = io.BytesIO()
                 folhas[0].save(pdf_bytes, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-                st.download_button("📥 Baixar PDF para ScanNCut", pdf_bytes.getvalue(), "Bazzott_Lovs_Editor.pdf", use_container_width=True)
+                st.download_button("📥 Baixar PDF Centralizado", pdf_bytes.getvalue(), "Bazzott_Lovs_Editor.pdf", use_container_width=True)
