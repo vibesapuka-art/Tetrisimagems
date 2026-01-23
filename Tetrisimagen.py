@@ -13,8 +13,8 @@ def tornar_impar(n):
     return n if n % 2 != 0 else n + 1
 
 def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade, espelhar):
-    # Converte para RGBA e faz uma cópia para não afetar o original na memória
-    img_proc = img.convert("RGBA")
+    # Converte para RGBA e cria uma cópia para economizar memória
+    img_proc = img.copy().convert("RGBA")
     
     if espelhar:
         img_proc = ImageOps.mirror(img_proc)
@@ -86,18 +86,17 @@ def montar_folhas(pecas, margem_cm):
     return folhas
 
 # --- INTERFACE ---
-st.set_page_config(page_title="Bazzott Studio Otimizado", layout="wide")
+st.set_page_config(page_title="Bazzott Studio Pro", layout="wide")
 
 if 'galeria' not in st.session_state:
     st.session_state.galeria = []
 
 with st.sidebar:
     st.title("🎨 Bazzott Editor")
-    margem = st.slider("Margem (cm)", 0.3, 1.5, 0.5)
+    margem = st.slider("Margem da Folha (cm)", 0.3, 1.5, 0.5)
     suave = st.slider("Suavização", 0, 30, 15)
     
-    st.divider()
-    if st.button("🗑️ Limpar Galeria"):
+    if st.button("🗑️ Esvaziar Galeria", width="stretch"):
         st.session_state.galeria = []
         st.rerun()
 
@@ -108,7 +107,7 @@ with st.sidebar:
     b_san = st.slider("Sangria (cm)", 0.0, 1.0, 0.25, step=0.05)
     b_esp = st.checkbox("Espelhar Tudo", False)
     
-    if st.button("🚀 Aplicar em Tudo"):
+    if st.button("🚀 Aplicar em Todas", width="stretch"):
         for item in st.session_state.galeria:
             id_it = item['id']
             st.session_state[f"m{id_it}"] = b_tam
@@ -117,11 +116,11 @@ with st.sidebar:
             st.session_state[f"e{id_it}"] = b_esp
         st.rerun()
 
-u = st.file_uploader("Adicione seus PNGs", type="png", accept_multiple_files=True)
+u = st.file_uploader("Arraste seus PNGs", type="png", accept_multiple_files=True)
 if u:
     for f in u:
-        # Verifica se já não adicionamos este arquivo específico nesta rodada
-        id_novo = f"img_{f.name}_{time.time()}_{random.randint(0,999)}"
+        timestamp = str(time.time()).replace(".", "")
+        id_novo = f"id_{timestamp}_{random.randint(0, 999)}"
         st.session_state.galeria.append({
             "id": id_novo,
             "name": f.name,
@@ -132,7 +131,7 @@ if u:
 if st.session_state.galeria:
     pecas_pdf = []
     total_unidades = 0
-    remover_id = None
+    item_para_remover = None
 
     for i, item in enumerate(st.session_state.galeria):
         id_it = item['id']
@@ -140,19 +139,19 @@ if st.session_state.galeria:
             col_del, col_img, col_cfg1, col_cfg2 = st.columns([0.1, 0.5, 2, 2])
             
             with col_del:
-                if st.button("❌", key=f"btn_del_{id_it}"):
-                    remover_id = i
+                if st.button("❌", key=f"del_{id_it}"):
+                    item_para_remover = i
             
             with col_img:
-                st.image(item['img'], use_container_width=True)
+                st.image(item['img'], width='stretch')
             
             with col_cfg1:
-                # Inicialização de valores
+                # Inicialização segura para evitar avisos
                 if f"m{id_it}" not in st.session_state: st.session_state[f"m{id_it}"] = 4.0
                 if f"q{id_it}" not in st.session_state: st.session_state[f"q{id_it}"] = 1
                 
-                t = st.number_input("Tam (cm)", 1.0, 25.0, key=f"m{id_it}")
-                q = st.number_input("Qtd (un)", 1, 500, key=f"q{id_it}")
+                t = st.number_input("cm", 1.0, 25.0, key=f"m{id_it}")
+                q = st.number_input("un", 1, 500, key=f"q{id_it}")
             
             with col_cfg2:
                 if f"s{id_it}" not in st.session_state: st.session_state[f"s{id_it}"] = 0.25
@@ -162,27 +161,23 @@ if st.session_state.galeria:
                 l = st.checkbox("Linha Corte", True, key=f"l{id_it}")
                 e = st.checkbox("Espelhar", key=f"e{id_it}")
 
-            # Prepara as figuras para o PDF
             p_final = gerar_contorno_individual(item['img'], t, s, l, suave, e)
             for _ in range(int(q)):
                 pecas_pdf.append(p_final)
                 total_unidades += 1
 
-    if remover_id is not None:
-        st.session_state.galeria.pop(remover_id)
+    if item_para_remover is not None:
+        st.session_state.galeria.pop(item_para_remover)
         st.rerun()
 
-    st.sidebar.info(f"Total de figuras: {total_unidades}")
-
-    if st.button(f"🎨 GERAR PDF ({total_unidades} FIGURAS)", use_container_width=True):
+    if st.button(f"🎨 GERAR PDF ({total_unidades} FIGURAS)", width="stretch"):
         if pecas_pdf:
-            with st.spinner("Montando as páginas..."):
+            with st.spinner("Preparando PDF de alta qualidade..."):
                 folhas = montar_folhas(pecas_pdf, margem)
                 if folhas:
-                    st.subheader("🖼️ Pré-visualização")
                     for idx, folha in enumerate(folhas):
-                        st.image(folha, caption=f"Página {idx+1}", use_container_width=True)
+                        st.image(folha, caption=f"Página {idx+1}", width='stretch')
                     
                     output = io.BytesIO()
                     folhas[0].save(output, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-                    st.download_button("📥 Baixar PDF", output.getvalue(), "Bazzott_Final.pdf", use_container_width=True)
+                    st.download_button("📥 BAIXAR PDF FINAL", output.getvalue(), "Bazzott_Final.pdf", width="stretch")
