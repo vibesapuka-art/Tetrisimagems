@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image, ImageOps, ImageFilter
 import io
 
 # --- CONFIGURAÇÕES TÉCNICAS (PRECISÃO 300 DPI) ---
@@ -10,16 +10,23 @@ def tornar_impar(n):
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade):
+def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade, espelhar):
+    # 1. Limpeza e Espelhamento
     bbox_limpeza = img.getbbox()
     if bbox_limpeza:
         img = img.crop(bbox_limpeza)
+    
+    # Aplica o modo espelhado se ativo
+    if espelhar:
+        img = ImageOps.mirror(img)
 
+    # 2. Redimensionamento
     alvo_px = int(medida_cm * CM_TO_PX)
     w, h = img.size
     proporcao = min(alvo_px / w, alvo_px / h)
     img = img.resize((int(w * proporcao), int(h * proporcao)), Image.LANCZOS).convert("RGBA")
 
+    # 3. Sangria e Máscara
     dist_px = int(sangria_cm * CM_TO_PX)
     
     if dist_px > 0:
@@ -33,6 +40,7 @@ def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_sua
     else:
         mask = img.split()[3].point(lambda p: 255 if p > 128 else 0)
 
+    # 4. Montagem
     peca_final = Image.new("RGBA", mask.size if dist_px > 0 else img.size, (0, 0, 0, 0))
     
     if linha_ativa:
@@ -53,7 +61,6 @@ def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_sua
 def montar_folhas(pecas, margem_cm):
     m_px = int(margem_cm * CM_TO_PX)
     e_px = int(0.1 * CM_TO_PX) 
-    
     folhas = []
     lista_pendente = pecas.copy()
     
@@ -61,40 +68,31 @@ def montar_folhas(pecas, margem_cm):
         folha = Image.new("RGBA", (A4_WIDTH, A4_HEIGHT), (0,0,0,0))
         x, y, h_linha = m_px, m_px, 0
         inseridos = []
-        
         for i, p in enumerate(lista_pendente):
             pw, ph = p.size
             if x + pw > A4_WIDTH - m_px:
-                x = m_px
-                y += h_linha + e_px
-                h_linha = 0
-            
+                x, y, h_linha = m_px, y + h_linha + e_px, 0
             if y + ph <= A4_HEIGHT - m_px:
                 folha.paste(p, (x, y), p)
-                x += pw + e_px
-                h_linha = max(h_linha, ph)
+                x, h_linha = x + pw + e_px, max(h_linha, ph)
                 inseridos.append(i)
-            else:
-                break
-        
+            else: break
         if not inseridos: break
         for idx in sorted(inseridos, reverse=True): lista_pendente.pop(idx)
-        
         f_branca = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
         f_branca.paste(folha, (0, 0), folha)
         folhas.append(f_branca)
-        
     return folhas
 
 # --- INTERFACE ---
-st.set_page_config(page_title="Bazzott Lov´s Editor", layout="wide")
+st.set_page_config(page_title="Bazzott Lov´s Editor Pro", layout="wide")
 
 if 'galeria' not in st.session_state:
     st.session_state.galeria = []
 
 with st.sidebar:
     st.header("⚙️ Ajustes de Margem")
-    margem = st.slider("Margem da Folha (cm)", 0.3, 1.5, 0.5, help="Diminua para encaixar mais figuras nas bordas.")
+    margem = st.slider("Margem da Folha (cm)", 0.3, 1.5, 0.5)
     suave = st.slider("Suavização", 0, 30, 15)
     
     st.divider()
@@ -102,12 +100,14 @@ with st.sidebar:
     b_tam = st.number_input("Tam (cm)", 1.0, 25.0, 4.0)
     b_qtd = st.number_input("Qtd", 1, 500, 20)
     b_san = st.slider("Sangria (cm)", 0.0, 1.0, 0.25, step=0.05)
+    b_esp = st.checkbox("Espelhar Tudo", False)
     
     if st.button("Aplicar a Todos"):
         for i in range(len(st.session_state.galeria)):
             st.session_state[f"m{i}"] = b_tam
             st.session_state[f"q{i}"] = b_qtd
             st.session_state[f"s{i}"] = b_san
+            st.session_state[f"e{i}"] = b_esp
         st.rerun()
 
 u = st.file_uploader("Subir PNGs", type="png", accept_multiple_files=True)
@@ -133,8 +133,9 @@ if st.session_state.galeria:
             with c3:
                 s = st.slider("Sang", 0.0, 1.0, key=f"s{i}", value=st.session_state.get(f"s{i}", 0.25), step=0.05)
                 l = st.checkbox("Corte", True, key=f"l{i}")
+                e = st.checkbox("Espelhar", key=f"e{i}", value=st.session_state.get(f"e{i}", False))
             
-            p = gerar_contorno_individual(item['img'], t, s, l, suave)
+            p = gerar_contorno_individual(item['img'], t, s, l, suave, e)
             for _ in range(q): 
                 pecas_preparadas.append(p)
                 total_figuras += 1
@@ -147,12 +148,10 @@ if st.session_state.galeria:
         folhas = montar_folhas(pecas_preparadas, margem)
         if folhas:
             st.subheader("🖼️ Pré-visualização das Páginas")
-            # Mostra as imagens na tela antes do botão de download 
             for idx, f in enumerate(folhas):
-                st.image(f, caption=f"Página {idx+1} - Verifique o encaixe nas bordas", use_container_width=True)
+                st.image(f, caption=f"Página {idx+1}", use_container_width=True)
             
             pdf_bytes = io.BytesIO()
             folhas[0].save(pdf_bytes, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-            
             st.divider()
-            st.download_button("📥 BAIXAR PDF FINAL", pdf_bytes.getvalue(), "Bazzott_Lovs_Editor.pdf", use_container_width=True)
+            st.download_button("📥 BAIXAR PDF FINAL", pdf_bytes.getvalue(), "Bazzott_Lovs_Mirror.pdf", use_container_width=True)
