@@ -79,9 +79,9 @@ if 'galeria' not in st.session_state:
 
 # BARRA LATERAL
 with st.sidebar:
-    st.title("🛠️ Configurações")
-    # Adicionada uma key única para o botão de limpar 
-    if st.button("🗑️ LIMPAR TUDO", key="btn_limpar_global", width="stretch"):
+    st.title("🛠️ Opções")
+    # Removi o "width" problemático daqui para testar estabilidade
+    if st.button("🗑️ LIMPAR TUDO", key="limpar_total"):
         st.session_state.galeria = []
         st.rerun()
     
@@ -91,12 +91,12 @@ with st.sidebar:
 
     st.divider()
     st.header("🪄 Ajuste em Massa")
-    m_tam = st.number_input("Tam Geral (cm)", 1.0, 25.0, 4.0)
-    m_qtd = st.number_input("Qtd Geral", 1, 500, 20)
-    m_san = st.slider("Sangria Geral", 0.0, 1.0, 0.25, step=0.05)
-    m_esp = st.checkbox("Espelhar Tudo", False)
+    m_tam = st.number_input("Tamanho", 1.0, 25.0, 4.0, key="m_tam")
+    m_qtd = st.number_input("Qtd", 1, 500, 10, key="m_qtd")
+    m_san = st.slider("Sangria", 0.0, 1.0, 0.25, step=0.05, key="m_san")
+    m_esp = st.checkbox("Espelhar Todos", False, key="m_esp")
 
-    if st.button("✅ Aplicar em Todos", key="btn_massa", width="stretch"):
+    if st.button("✅ Aplicar Todos", key="btn_massa"):
         for item in st.session_state.galeria:
             iid = item['id']
             st.session_state[f"t_{iid}"] = m_tam
@@ -106,10 +106,10 @@ with st.sidebar:
         st.rerun()
 
 # UPLOADER
-u = st.file_uploader("Suba seus PNGs", type="png", accept_multiple_files=True)
+u = st.file_uploader("Escolha os PNGs", type="png", accept_multiple_files=True, key="uploader_principal")
 if u:
     for f in u:
-        img_id = f"img_{random.randint(1000,9999)}_{time.time()}"
+        img_id = f"img_{random.randint(1000,9999)}_{int(time.time())}"
         st.session_state.galeria.append({
             "id": img_id,
             "name": f.name,
@@ -117,51 +117,56 @@ if u:
         })
     st.rerun()
 
-# EXIBIÇÃO DA GALERIA
+# GALERIA
 if st.session_state.galeria:
-    pecas_preparadas = []
-    remover_idx = -1
+    pecas_pdf = []
+    total_un = 0
+    remover_id = None
 
     for i, item in enumerate(st.session_state.galeria):
         iid = item['id']
-        with st.expander(f"🖼️ {item['name']}", expanded=True):
-            c1, c2, c3, c4 = st.columns([0.5, 2, 2, 0.5])
+        with st.expander(f"📦 {item['name']}", expanded=True):
+            c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
             
             with c1:
-                st.image(item['img'], width=100)
+                st.image(item['img'], width=80)
             
             with c2:
+                # Inicialização forçada para evitar erro de widget
                 if f"t_{iid}" not in st.session_state: st.session_state[f"t_{iid}"] = 4.0
-                if f"q_{iid}" not in st.session_state: st.session_state[f"q_{iid}"] = 10
-                t = st.number_input("cm", 1.0, 25.0, key=f"t_{iid}")
-                q = st.number_input("un", 1, 500, key=f"q_{iid}")
+                if f"q_{iid}" not in st.session_state: st.session_state[f"q_{iid}"] = 1
+                
+                t_val = st.number_input("cm", 1.0, 25.0, key=f"t_{iid}")
+                q_val = st.number_input("un", 1, 500, key=f"q_{iid}")
                 
             with c3:
                 if f"s_{iid}" not in st.session_state: st.session_state[f"s_{iid}"] = 0.25
                 if f"e_{iid}" not in st.session_state: st.session_state[f"e_{iid}"] = False
-                s = st.slider("Sangria", 0.0, 1.0, key=f"s_{iid}", step=0.05)
-                esp = st.checkbox("Espelhar", key=f"e_{iid}")
-                l = st.checkbox("Corte", True, key=f"l_{iid}")
+                
+                s_val = st.slider("Sang", 0.0, 1.0, key=f"s_{iid}", step=0.05)
+                e_val = st.checkbox("Espelhar", key=f"e_{iid}")
+                l_val = st.checkbox("Corte", True, key=f"l_{iid}")
 
             with c4:
                 if st.button("❌", key=f"del_{iid}"):
-                    remover_idx = i
+                    remover_id = i
 
-            img_final = gerar_contorno_individual(item['img'], t, s, l, suave, esp)
-            for _ in range(int(q)):
-                pecas_preparadas.append(img_final)
+            img_p = gerar_contorno_individual(item['img'], t_val, s_val, l_val, suave, e_val)
+            for _ in range(int(q_val)):
+                pecas_pdf.append(img_p)
+                total_un += 1
 
-    if remover_idx != -1:
-        st.session_state.galeria.pop(remover_idx)
+    if remover_id is not None:
+        st.session_state.galeria.pop(remover_id)
         st.rerun()
 
-    if st.button(f"🚀 GERAR PDF ({len(pecas_preparadas)} FIGURAS)", key="btn_gerar_pdf", width="stretch"):
-        with st.spinner("Montando páginas..."):
-            folhas = montar_folhas(pecas_preparadas, margem)
+    if st.button(f"🚀 GERAR PDF ({total_un} itens)", key="btn_gerar", width=400):
+        with st.spinner("Criando PDF..."):
+            folhas = montar_folhas(pecas_pdf, margem)
             if folhas:
                 for idx, folha in enumerate(folhas):
-                    st.image(folha, caption=f"Página {idx+1}", width="stretch")
+                    st.image(folha, caption=f"Página {idx+1}", width=600)
                 
                 buf = io.BytesIO()
                 folhas[0].save(buf, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-                st.download_button("📥 BAIXAR PDF", buf.getvalue(), "Bazzott_Final.pdf", key="btn_download", width="stretch")
+                st.download_button("📥 BAIXAR", buf.getvalue(), "projeto.pdf", key="btn_down")
