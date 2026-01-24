@@ -2,163 +2,180 @@ import streamlit as st
 from PIL import Image, ImageFilter, ImageOps
 import io
 
-# --- CONFIGURAÇÕES TÉCNICAS (PADRÃO A4 300 DPI) ---
-# 300 DPI: 1 polegada (2.54cm) = 300px -> 1cm = 118.1102px
+# --- CONFIGURAÇÕES TÉCNICAS RÍGIDAS (A4 300 DPI) ---
 DPI = 300
 CM_TO_PX = 118.1102
-A4_WIDTH_PX = int(21.0 * CM_TO_PX)  # 2480
-A4_HEIGHT_PX = int(29.7 * CM_TO_PX) # 3508
+A4_WIDTH_PX = int(21.0 * CM_TO_PX)  # 2480 px
+A4_HEIGHT_PX = int(29.7 * CM_TO_PX) # 3508 px
 
 def tornar_impar(n):
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-# --- MOTOR DE PROCESSAMENTO (TAMANHO REAL) ---
-def gerar_peca_precisa(img, medida_cm, sangria_cm, linha_ativa, suavidade, espessura_mm, espelhar=False):
-    # 1. Limpeza e Espelhamento
+# --- MOTOR DE PRECISÃO PELO CONTEÚDO REAL ---
+def gerar_peca_final(img, medida_cm, sangria_cm, linha_ativa, suavidade, espessura_mm, espelhar=False):
     img = img.convert("RGBA")
+    
+    # 1. ENCONTRA O CONTEÚDO REAL (Ignora transparência ao redor)
+    # O bbox pega exatamente do primeiro ao último pixel visível
     bbox = img.getbbox()
-    if bbox: img = img.crop(bbox)
-    if espelhar: img = ImageOps.mirror(img)
-
-    # 2. REDIMENSIONAMENTO DO DESENHO (O CORAÇÃO DO PROBLEMA)
-    # Aqui garantimos que o DESENHO tenha a medida exata pedida
-    w, h = img.size
-    proporcao = (medida_cm * CM_TO_PX) / max(w, h)
-    img_desenho = img.resize((int(w * proporcao), int(h * proporcao)), Image.LANCZOS)
-
-    # 3. CÁLCULO DA SANGRIA (ADICIONADA POR FORA)
-    sangria_px = int(sangria_cm * CM_TO_PX)
-    linha_px = int((espessura_mm / 10) * CM_TO_PX)
+    if not bbox:
+        return None
+    img_real = img.crop(bbox)
     
-    # Criamos a máscara baseada no desenho já no tamanho correto
-    # Adicionamos um respiro para o processamento de filtros
-    padding = sangria_px + linha_px + 10
-    canvas_mask = Image.new("L", (img_desenho.width + padding*2, img_desenho.height + padding*2), 0)
-    canvas_mask.paste(img_desenho.split()[3], (padding, padding))
+    if espelhar:
+        img_real = ImageOps.mirror(img_real)
+
+    # 2. REDIMENSIONAMENTO PROPORCIONAL PELO MAIOR LADO
+    w, h = img_real.size
+    # Define o fator de escala baseado no maior lado (altura ou largura)
+    maior_lado_px = medida_cm * CM_TO_PX
+    escala = maior_lado_px / max(w, h)
     
-    # Gerar a borda branca (Sangria)
-    if sangria_px > 0:
-        mask_sangria = canvas_mask.filter(ImageFilter.MaxFilter(tornar_impar(sangria_px * 2)))
+    # Redimensiona mantendo a proporção exata para não achatar
+    novo_tamanho = (int(w * escala), int(h * escala))
+    img_redimensionada = img_real.resize(novo_tamanho, Image.LANCZOS)
+
+    # 3. CÁLCULO DE SANGRIA E LINHA (EXTERNOS AO DESENHO)
+    sang_px = int(sangria_cm * CM_TO_PX)
+    lin_px = int((espessura_mm / 10) * CM_TO_PX)
+    
+    # Margem de segurança para o processamento de filtros
+    padding = sang_px + lin_px + 10
+    canvas_w = img_redimensionada.width + (padding * 2)
+    canvas_h = img_redimensionada.height + (padding * 2)
+    
+    # Criar máscara para a sangria/borda
+    mask_alpha = Image.new("L", (canvas_w, canvas_h), 0)
+    mask_alpha.paste(img_redimensionada.split()[3], (padding, padding))
+    
+    # Processar contorno
+    if sang_px > 0:
+        mask_final = mask_alpha.filter(ImageFilter.MaxFilter(tornar_impar(sang_px * 2)))
         if suavidade > 0:
-            mask_sangria = mask_sangria.filter(ImageFilter.GaussianBlur(radius=suavidade/2))
-            mask_sangria = mask_sangria.point(lambda p: 255 if p > 128 else 0)
+            mask_final = mask_final.filter(ImageFilter.GaussianBlur(radius=suavidade/2))
+            mask_final = mask_final.point(lambda p: 255 if p > 128 else 0)
     else:
-        mask_sangria = canvas_mask
+        mask_final = mask_alpha
 
-    # 4. MONTAGEM DA PEÇA FINAL
-    peca_final = Image.new("RGBA", mask_sangria.size, (0, 0, 0, 0))
+    # 4. MONTAGEM DA PEÇA
+    peca = Image.new("RGBA", mask_final.size, (0, 0, 0, 0))
     
-    # Fundo Branco
-    peca_final.paste((255, 255, 255, 255), (0, 0), mask_sangria)
+    # Fundo da Sangria (Branco)
+    peca.paste((255, 255, 255, 255), (0, 0), mask_final)
     
-    # Linha Preta (opcional)
+    # Linha de Corte (Preta)
     if linha_ativa:
-        mask_linha = mask_sangria.filter(ImageFilter.MaxFilter(tornar_impar(linha_px if linha_px > 0 else 1)))
-        peca_final.paste((0, 0, 0, 255), (0, 0), mask_linha)
-        # Limpa o interior para a linha não cobrir o desenho
-        interior = mask_sangria.filter(ImageFilter.MinFilter(3))
-        peca_final.paste((0,0,0,0), (0,0), interior)
+        mask_contorno = mask_final.filter(ImageFilter.MaxFilter(tornar_impar(lin_px if lin_px > 0 else 1)))
+        peca.paste((0, 0, 0, 255), (0, 0), mask_contorno)
+        # Limpa o interior para preservar o desenho
+        interior = mask_final.filter(ImageFilter.MinFilter(3))
+        peca.paste((0,0,0,0), (0,0), interior)
 
-    # Colar o desenho original por cima (centralizado)
-    off_x = (peca_final.width - img_desenho.width) // 2
-    off_y = (peca_final.height - img_desenho.height) // 2
-    peca_final.paste(img_desenho, (off_x, off_y), img_desenho)
+    # Colar o desenho centralizado
+    pos_x = (peca.width - img_redimensionada.width) // 2
+    pos_y = (peca.height - img_redimensionada.height) // 2
+    peca.paste(img_redimensionada, (pos_x, pos_y), img_redimensionada)
     
-    return peca_final.crop(peca_final.getbbox())
+    return peca.crop(peca.getbbox())
 
-# --- FUNÇÃO DE MONTAGEM NO A4 ---
-def montar_folhas_a4(pecas, margem_cm):
+# --- SISTEMA DE MONTAGEM A4 ---
+def organizar_no_a4(lista_pecas, margem_cm):
     m_px = int(margem_cm * CM_TO_PX)
-    e_px = int(0.1 * CM_TO_PX) # Espaço de 1mm entre peças para segurança
+    espacamento_px = int(0.15 * CM_TO_PX) # 1.5mm entre peças
     folhas = []
     
-    while pecas:
+    while lista_pecas:
         folha = Image.new("RGB", (A4_WIDTH_PX, A4_HEIGHT_PX), (255, 255, 255))
-        cx, cy, lh = m_px, m_px, 0
-        inseridos_indices = []
+        x, y, altura_linha = m_px, m_px, 0
+        indices_removidos = []
         
-        for i, p in enumerate(pecas):
+        for i, p in enumerate(lista_pecas):
             pw, ph = p.size
-            if cx + pw > A4_WIDTH_PX - m_px:
-                cx = m_px
-                cy += lh + e_px
-                lh = 0
+            # Verifica se precisa pular de linha
+            if x + pw > A4_WIDTH_PX - m_px:
+                x = m_px
+                y += altura_linha + espacamento_px
+                altura_linha = 0
             
-            if cy + ph <= A4_HEIGHT_PX - m_px:
-                folha.paste(p, (cx, cy), p)
-                cx += pw + e_px
-                lh = max(lh, ph)
-                inseridos_indices.append(i)
+            # Verifica se ainda cabe na altura da folha
+            if y + ph <= A4_HEIGHT_PX - m_px:
+                folha.paste(p, (x, y), p)
+                x += pw + espacamento_px
+                altura_linha = max(altura_linha, ph)
+                indices_removidos.append(i)
             else:
                 break
         
         folhas.append(folha)
-        for idx in sorted(inseridos_indices, reverse=True):
-            pecas.pop(idx)
-        if not inseridos_indices: break # Evitar loop infinito
+        for idx in sorted(indices_removidos, reverse=True):
+            lista_pecas.pop(idx)
+        if not indices_removidos: break # Evita loop infinito se a peça for maior que a folha
             
     return folhas
 
 # --- INTERFACE ---
 st.set_page_config(page_title="Bazzott Love Edit", layout="wide")
-st.title("✂️ Bazzott Love Edit - Precisão A4")
+st.title("✂️ Bazzott Love Edit - Tamanho Real pelo Conteúdo")
 
 if 'galeria' not in st.session_state: st.session_state.galeria = []
 
 with st.sidebar:
-    st.header("⚙️ Ajustes de Folha")
-    espessura = st.slider("Linha (mm)", 0.1, 3.0, 0.3)
-    suavidade = st.slider("Suavização", 0, 30, 10)
-    margem = st.slider("Margem Papel (cm)", 0.3, 1.5, 0.5)
+    st.header("⚙️ Ajustes Globais")
+    linha_w = st.slider("Linha (mm)", 0.1, 3.0, 0.3)
+    suave = st.slider("Suavização", 0, 30, 10)
+    margem_folha = st.slider("Margem Papel (cm)", 0.3, 2.0, 0.5)
     
     st.divider()
     st.header("📦 Sincronização em Massa")
-    b_size = st.number_input("Tamanho (cm)", 1.0, 25.0, 4.0)
-    b_qtd = st.number_input("Qtd", 1, 100, 24)
-    b_sangria = st.slider("Sangria (cm)", 0.0, 1.0, 0.1)
+    m_tamanho = st.number_input("Tamanho do Desenho (cm)", 1.0, 25.0, 4.0)
+    m_qtd = st.number_input("Quantidade Total", 1, 100, 24)
+    m_sangria = st.slider("Sangria (cm)", 0.0, 2.0, 0.1)
     
     if st.button("🔄 Aplicar a Todos"):
         for i in range(len(st.session_state.galeria)):
-            st.session_state[f"m{i}"] = b_size
-            st.session_state[f"q{i}"] = b_qtd
-            st.session_state[f"s{i}"] = b_sangria
+            st.session_state[f"m{i}"] = m_tamanho
+            st.session_state[f"q{i}"] = m_qtd
+            st.session_state[f"s{i}"] = m_sangria
         st.rerun()
 
-u = st.file_uploader("Suba seus PNGs", type="png", accept_multiple_files=True)
+u = st.file_uploader("Upload PNG", type="png", accept_multiple_files=True)
 if u:
     for f in u:
         if f.name not in [img['name'] for img in st.session_state.galeria]:
             st.session_state.galeria.append({"name": f.name, "img": Image.open(f)})
 
 if st.session_state.galeria:
-    all_pieces_to_render = []
+    fila_processamento = []
     for i, item in enumerate(st.session_state.galeria):
         with st.expander(f"🖼️ {item['name']}", expanded=True):
             c1, c2, c3 = st.columns([1, 2, 2])
             with c1: st.image(item['img'], width=80)
             with c2:
-                med = st.number_input("Desenho (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
-                qtd = st.number_input("Qtd Normal", 0, 100, key=f"q{i}", value=st.session_state.get(f"q{i}", 24))
+                t_cm = st.number_input("Medida Lado Maior (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
+                q_norm = st.number_input("Qtd Normal", 0, 100, key=f"q{i}", value=st.session_state.get(f"q{i}", 24))
             with c3:
-                sang = st.slider("Sangria Externa (cm)", 0.0, 1.0, key=f"s{i}", value=st.session_state.get(f"s{i}", 0.1))
-                qtd_e = st.number_input("Qtd Espelho", 0, 100, key=f"qe{i}", value=0)
-                lin = st.checkbox("Linha Preta", True, key=f"l{i}")
+                s_cm = st.slider("Sangria (cm)", 0.0, 2.0, key=f"s{i}", value=st.session_state.get(f"s{i}", 0.1))
+                q_esp = st.number_input("Qtd Espelho", 0, 100, key=f"qe{i}", value=0)
+                l_ativa = st.checkbox("Linha Preta", True, key=f"l{i}")
             
-            # Gerar Peças
-            if qtd > 0:
-                p_n = gerar_peca_precisa(item['img'], med, sang, lin, suavidade, espessura, False)
-                for _ in range(qtd): all_pieces_to_render.append(p_n)
-            if qtd_e > 0:
-                p_e = gerar_peca_precisa(item['img'], med, sang, lin, suavidade, espessura, True)
-                for _ in range(qtd_e): all_pieces_to_render.append(p_e)
+            # Gerar Peças Individuais
+            if q_norm > 0:
+                p_n = gerar_peca_final(item['img'], t_cm, s_cm, l_ativa, suave, linha_w, False)
+                if p_n: 
+                    for _ in range(q_norm): fila_processamento.append(p_n)
+            if q_esp > 0:
+                p_e = gerar_peca_final(item['img'], t_cm, s_cm, l_ativa, suave, linha_w, True)
+                if p_e: 
+                    for _ in range(q_esp): fila_processamento.append(p_e)
 
     if st.button("🚀 GERAR PDF FINAL", use_container_width=True):
-        folhas = montar_folhas_a4(all_pieces_to_render, margem)
-        if folhas:
-            for idx, f in enumerate(folhas): st.image(f, caption=f"Página {idx+1}")
-            
-            pdf_out = io.BytesIO()
-            # Forçamos a resolução de 300 DPI no salvamento do PDF
-            folhas[0].save(pdf_out, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0, subsampling=0, quality=100)
-            st.download_button("📥 Baixar PDF A4 Real", pdf_out.getvalue(), "Bazzott_Final_A4.pdf", use_container_width=True)
+        with st.spinner("Organizando na folha..."):
+            folhas_finais = organizar_no_a4(fila_processamento, margem_folha)
+            if folhas_finais:
+                for idx, folha in enumerate(folhas_finais):
+                    st.image(folha, caption=f"Página {idx+1}")
+                
+                pdf_bytes = io.BytesIO()
+                folhas_finais[0].save(pdf_bytes, format="PDF", save_all=True, append_images=folhas_finais[1:], resolution=300.0)
+                st.download_button("📥 Baixar PDF Precisão", pdf_bytes.getvalue(), "Bazzott_Love_Final.pdf", use_container_width=True)
