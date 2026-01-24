@@ -1,7 +1,6 @@
 import streamlit as st
 from PIL import Image, ImageChops, ImageFilter, ImageOps
 import io
-import time
 
 # --- CONFIGURAÇÕES TÉCNICAS (PRECISÃO 300 DPI) ---
 A4_WIDTH, A4_HEIGHT = 2480, 3508
@@ -11,13 +10,13 @@ def tornar_impar(n):
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-# --- MOTOR DE CONTORNO COM ESPELHAMENTO ---
+# --- MOTOR DE CONTORNO ---
 def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade, espelhar):
     bbox_limpeza = img.getbbox()
     if bbox_limpeza:
         img = img.crop(bbox_limpeza)
 
-    # NOVO: Aplica o espelhamento horizontal se marcado
+    # NOVO: Espelhar a imagem se o checkbox estiver marcado
     if espelhar:
         img = ImageOps.mirror(img)
 
@@ -95,18 +94,17 @@ with st.sidebar:
     margem = st.slider("Margem da Folha (cm)", 0.5, 2.0, 1.0)
     suave = st.slider("Suavização do Corte", 0, 30, 15)
     
-    if st.button("🗑️ LIMPAR TUDO"):
+    st.divider()
+    if st.button("Limpar Galeria"):
         st.session_state.galeria = []
         st.rerun()
 
-# Uploader
 u = st.file_uploader("Adicionar novos PNGs", type="png", accept_multiple_files=True)
 if u:
     for f in u:
-        # Geramos um ID único usando o tempo para permitir subir a mesma imagem várias vezes
-        uid = f"{f.name}_{time.time()}"
         img_data = Image.open(f).copy()
-        st.session_state.galeria.append({"id": uid, "name": f.name, "img": img_data})
+        # Voltamos a usar apenas o nome do arquivo como identificador
+        st.session_state.galeria.append({"name": f.name, "img": img_data})
     st.rerun()
 
 if st.session_state.galeria:
@@ -115,30 +113,29 @@ if st.session_state.galeria:
     indices_para_remover = []
 
     for i, item in enumerate(st.session_state.galeria):
-        iid = item['id']
-        with st.expander(f"🖼️ Configurar: {item['name']}", expanded=True):
-            col_del, col_img, col_cfg, col_sang = st.columns([0.1, 0.9, 2, 2])
+        with st.expander(f"🖼️ {item['name']}", expanded=True):
+            col_img, col_cfg, col_sang, col_del = st.columns([1, 2, 2, 0.5])
             
-            with col_del:
-                if st.button("❌", key=f"del_{iid}"):
-                    indices_para_remover.append(i)
-            
-            with col_img:
+            with col_img: 
                 st.image(item['img'], width=80)
-                # NOVO: Botão para espelhar esta imagem específica
-                esp = st.checkbox("Espelhar", key=f"esp_{iid}", help="Inverte para fazer o verso da bandeirinha.")
+                # Checkbox simples de espelhar
+                esp = st.checkbox("Espelhar", key=f"esp_{i}")
             
             with col_cfg:
-                t = st.number_input("Tam (cm)", 1.0, 25.0, key=f"m{iid}", value=4.0)
-                q = st.number_input("Qtd", 1, 500, key=f"q{iid}", value=10)
+                t = st.number_input("Tam (cm)", 1.0, 25.0, key=f"m{i}", value=4.0)
+                q = st.number_input("Qtd", 1, 500, key=f"q{i}", value=10)
             
             with col_sang:
-                s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s{iid}", value=0.25, step=0.05)
-                l = st.checkbox("Linha Corte", True, key=f"l{iid}")
+                s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s{i}", value=0.25, step=0.05)
+                l = st.checkbox("Linha Corte", True, key=f"l{i}")
             
-            # Processamento
+            with col_del:
+                if st.button("❌", key=f"del_{i}"):
+                    indices_para_remover.append(i)
+            
+            # Chama a função passando o estado do espelhamento
             p_processada = gerar_contorno_individual(item['img'], t, s, l, suave, esp)
-            for _ in range(int(q)): 
+            for _ in range(q): 
                 pecas_para_pdf.append(p_processada)
                 total_figuras += 1
 
@@ -155,4 +152,4 @@ if st.session_state.galeria:
             
             pdf_output = io.BytesIO()
             folhas_finais[0].save(pdf_output, format="PDF", save_all=True, append_images=folhas_finais[1:], resolution=300.0)
-            st.download_button("📥 Baixar PDF Final", pdf_output.getvalue(), "Studio_Bazzott.pdf", use_container_width=True)
+            st.download_button("📥 Baixar PDF Final", pdf_output.getvalue(), "Bazzott_Studio.pdf", use_container_width=True)
