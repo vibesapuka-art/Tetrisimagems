@@ -79,20 +79,20 @@ if 'galeria' not in st.session_state:
 
 with st.sidebar:
     st.title("🛠️ Painel")
-    if st.button("🗑️ LIMPAR TUDO", key="clear_all", use_container_width=True):
+    if st.button("🗑️ LIMPAR TUDO", key="limpar_total"):
         st.session_state.galeria = []
         st.rerun()
     
     st.divider()
-    margem = st.slider("Margem da Folha (cm)", 0.3, 1.5, 0.5)
-    suave = st.slider("Suavização Contorno", 0, 30, 15)
+    margem = st.slider("Margem (cm)", 0.3, 1.5, 0.5)
+    suave = st.slider("Suavização", 0, 30, 15)
 
     st.header("🪄 Ajuste em Massa")
     m_tam = st.number_input("Tam (cm)", 1.0, 25.0, 4.0)
     m_qtd = st.number_input("Qtd", 1, 500, 10)
     m_san = st.slider("Sangria", 0.0, 1.0, 0.25, step=0.05)
     
-    if st.button("✅ Aplicar a Todos", key="mass_apply", use_container_width=True):
+    if st.button("✅ Aplicar a Todos", key="btn_massa_sidebar"):
         for item in st.session_state.galeria:
             iid = item['id']
             st.session_state[f"t_{iid}"] = m_tam
@@ -100,12 +100,13 @@ with st.sidebar:
             st.session_state[f"s_{iid}"] = m_san
         st.rerun()
 
-# Uploader
-u = st.file_uploader("Suba seus PNGs aqui", type="png", accept_multiple_files=True)
+# Uploader Principal
+u = st.file_uploader("Suba seus PNGs aqui", type="png", accept_multiple_files=True, key="main_uploader")
 if u:
     for f in u:
         if f.name not in [img['name'] for img in st.session_state.galeria]:
-            img_id = f"img_{int(time.time())}_{random.randint(1000, 9999)}"
+            # Criamos um ID único para cada imagem baseado no nome e tempo
+            img_id = f"{f.name}_{int(time.time())}"
             st.session_state.galeria.append({
                 "id": img_id, 
                 "name": f.name, 
@@ -113,22 +114,21 @@ if u:
             })
     st.rerun()
 
-# Exibição da Galeria
+# Exibição da Galeria e Edição
 if st.session_state.galeria:
     pecas_preparadas = []
-    remover_idx = -1
+    indices_remover = []
 
     for i, item in enumerate(st.session_state.galeria):
         iid = item['id']
-        with st.expander(f"📦 Configurações: {item['name']}", expanded=True):
+        # Usamos o ID único na 'key' de cada elemento para evitar erro de duplicata
+        with st.expander(f"📦 Configurar: {item['name']}", expanded=True):
             c1, c2, c3, c4 = st.columns([0.8, 2, 2, 0.5])
             
             with c1:
-                # Exibe a imagem miniatura para confirmar que carregou
                 st.image(item['img'], width=100)
             
             with c2:
-                # Usamos o iid único para manter os valores salvos
                 t = st.number_input("Tamanho (cm)", 1.0, 25.0, key=f"t_{iid}", value=st.session_state.get(f"t_{iid}", 4.0))
                 q = st.number_input("Quantidade", 1, 500, key=f"q_{iid}", value=st.session_state.get(f"q_{iid}", 1))
             
@@ -138,25 +138,26 @@ if st.session_state.galeria:
             
             with c4:
                 if st.button("❌", key=f"del_{iid}"):
-                    remover_idx = i
+                    indices_remover.append(i)
 
-            # Processa a imagem individualmente para o PDF
+            # Processamento para o PDF
             res = gerar_contorno_individual(item['img'], t, s, l, suave)
             for _ in range(int(q)):
                 pecas_preparadas.append(res)
 
-    if remover_idx != -1:
-        st.session_state.galeria.pop(remover_idx)
+    if indices_remover:
+        for idx in sorted(indices_remover, reverse=True):
+            st.session_state.galeria.pop(idx)
         st.rerun()
 
-    # Botão Final
-    if st.button(f"🚀 GERAR PDF ({len(pecas_preparadas)} ITENS)", key="gen_pdf", use_container_width=True):
+    st.divider()
+    if st.button(f"🚀 GERAR PDF ({len(pecas_preparadas)} FIGURAS)", key="gerar_final"):
         with st.spinner("Montando páginas..."):
             folhas = montar_folhas(pecas_preparadas, margem)
             if folhas:
                 for idx, folha in enumerate(folhas):
-                    st.image(folha, caption=f"Página {idx+1}", use_container_width=True)
+                    st.image(folha, caption=f"Página {idx+1}")
                 
                 buf = io.BytesIO()
                 folhas[0].save(buf, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-                st.download_button("📥 BAIXAR PDF PRONTO", buf.getvalue(), "projeto_impressao.pdf", use_container_width=True)
+                st.download_button("📥 BAIXAR PROJETO FINAL", buf.getvalue(), "impressao_bazzott.pdf")
