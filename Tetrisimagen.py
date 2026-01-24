@@ -9,22 +9,20 @@ A4_WIDTH, A4_HEIGHT = 2480, 3508
 CM_TO_PX = 118.11 
 
 def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade, espelhar):
-    # Limpeza e Espelhamento
     img = img.convert("RGBA")
     bbox = img.getbbox()
     if bbox:
         img = img.crop(bbox)
     
+    # Função para criar o verso da bandeirinha
     if espelhar:
         img = ImageOps.mirror(img)
 
-    # Redimensionamento
     alvo_px = int(medida_cm * CM_TO_PX)
     w, h = img.size
     prop = min(alvo_px / w, alvo_px / h)
     img = img.resize((int(w * prop), int(h * prop)), Image.LANCZOS)
 
-    # Sangria e Máscara
     dist_px = int(sangria_cm * CM_TO_PX)
     if dist_px > 0:
         pad = dist_px + 10
@@ -81,8 +79,8 @@ if 'galeria' not in st.session_state:
 
 with st.sidebar:
     st.title("🛠️ Painel")
-    # Correção do erro de ID duplicado usando uma chave única (key)
-    if st.button("🗑️ LIMPAR TUDO", key="btn_limpar_global"):
+    # Uso de 'key' única para evitar o erro DuplicateElementId 
+    if st.button("🗑️ LIMPAR TUDO", key="btn_limpar_sessao"):
         st.session_state.galeria = []
         st.rerun()
     
@@ -92,7 +90,7 @@ with st.sidebar:
 u = st.file_uploader("Suba seus PNGs aqui", type="png", accept_multiple_files=True)
 if u:
     for f in u:
-        # Gera ID único baseado no nome e timestamp para evitar conflitos
+        # Gera um ID único baseado no tempo para permitir duplicatas sem erro
         uid = hashlib.md5(f"{f.name}{time.time()}".encode()).hexdigest()[:8]
         st.session_state.galeria.append({"id": uid, "name": f.name, "img": Image.open(f).copy()})
     st.rerun()
@@ -132,4 +130,5 @@ if st.session_state.galeria:
             
             buf = io.BytesIO()
             folhas[0].save(buf, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-            st.download_button("📥 BAIXAR PDF", buf.getvalue(), "projeto.pdf", use_container_width=True, key="btn_download")
+            st.download_button("📥 BAIXAR PDF", buf.getvalue(), "projeto.pdf", use_container_width=True, key="btn_download_final")
+        
