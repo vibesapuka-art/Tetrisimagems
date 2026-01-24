@@ -17,7 +17,6 @@ def gerar_peca_final(img, medida_cm, sangria_cm, linha_ativa, suavidade, espessu
     img = img.convert("RGBA")
     
     # 1. ENCONTRA O CONTEÚDO REAL (Ignora transparência ao redor)
-    # O bbox pega exatamente do primeiro ao último pixel visível
     bbox = img.getbbox()
     if not bbox:
         return None
@@ -28,11 +27,10 @@ def gerar_peca_final(img, medida_cm, sangria_cm, linha_ativa, suavidade, espessu
 
     # 2. REDIMENSIONAMENTO PROPORCIONAL PELO MAIOR LADO
     w, h = img_real.size
-    # Define o fator de escala baseado no maior lado (altura ou largura)
     maior_lado_px = medida_cm * CM_TO_PX
     escala = maior_lado_px / max(w, h)
     
-    # Redimensiona mantendo a proporção exata para não achatar
+    # Redimensiona mantendo a proporção exata para não achatar ou esticar
     novo_tamanho = (int(w * escala), int(h * escala))
     img_redimensionada = img_real.resize(novo_tamanho, Image.LANCZOS)
 
@@ -40,16 +38,13 @@ def gerar_peca_final(img, medida_cm, sangria_cm, linha_ativa, suavidade, espessu
     sang_px = int(sangria_cm * CM_TO_PX)
     lin_px = int((espessura_mm / 10) * CM_TO_PX)
     
-    # Margem de segurança para o processamento de filtros
     padding = sang_px + lin_px + 10
     canvas_w = img_redimensionada.width + (padding * 2)
     canvas_h = img_redimensionada.height + (padding * 2)
     
-    # Criar máscara para a sangria/borda
     mask_alpha = Image.new("L", (canvas_w, canvas_h), 0)
     mask_alpha.paste(img_redimensionada.split()[3], (padding, padding))
     
-    # Processar contorno
     if sang_px > 0:
         mask_final = mask_alpha.filter(ImageFilter.MaxFilter(tornar_impar(sang_px * 2)))
         if suavidade > 0:
@@ -60,19 +55,14 @@ def gerar_peca_final(img, medida_cm, sangria_cm, linha_ativa, suavidade, espessu
 
     # 4. MONTAGEM DA PEÇA
     peca = Image.new("RGBA", mask_final.size, (0, 0, 0, 0))
-    
-    # Fundo da Sangria (Branco)
     peca.paste((255, 255, 255, 255), (0, 0), mask_final)
     
-    # Linha de Corte (Preta)
     if linha_ativa:
         mask_contorno = mask_final.filter(ImageFilter.MaxFilter(tornar_impar(lin_px if lin_px > 0 else 1)))
         peca.paste((0, 0, 0, 255), (0, 0), mask_contorno)
-        # Limpa o interior para preservar o desenho
         interior = mask_final.filter(ImageFilter.MinFilter(3))
         peca.paste((0,0,0,0), (0,0), interior)
 
-    # Colar o desenho centralizado
     pos_x = (peca.width - img_redimensionada.width) // 2
     pos_y = (peca.height - img_redimensionada.height) // 2
     peca.paste(img_redimensionada, (pos_x, pos_y), img_redimensionada)
@@ -82,7 +72,7 @@ def gerar_peca_final(img, medida_cm, sangria_cm, linha_ativa, suavidade, espessu
 # --- SISTEMA DE MONTAGEM A4 ---
 def organizar_no_a4(lista_pecas, margem_cm):
     m_px = int(margem_cm * CM_TO_PX)
-    espacamento_px = int(0.15 * CM_TO_PX) # 1.5mm entre peças
+    espacamento_px = int(0.15 * CM_TO_PX) 
     folhas = []
     
     while lista_pecas:
@@ -92,13 +82,11 @@ def organizar_no_a4(lista_pecas, margem_cm):
         
         for i, p in enumerate(lista_pecas):
             pw, ph = p.size
-            # Verifica se precisa pular de linha
             if x + pw > A4_WIDTH_PX - m_px:
                 x = m_px
                 y += altura_linha + espacamento_px
                 altura_linha = 0
             
-            # Verifica se ainda cabe na altura da folha
             if y + ph <= A4_HEIGHT_PX - m_px:
                 folha.paste(p, (x, y), p)
                 x += pw + espacamento_px
@@ -110,13 +98,13 @@ def organizar_no_a4(lista_pecas, margem_cm):
         folhas.append(folha)
         for idx in sorted(indices_removidos, reverse=True):
             lista_pecas.pop(idx)
-        if not indices_removidos: break # Evita loop infinito se a peça for maior que a folha
+        if not indices_removidos: break 
             
     return folhas
 
 # --- INTERFACE ---
 st.set_page_config(page_title="Bazzott Love Edit", layout="wide")
-st.title("✂️ Bazzott Love Edit - Tamanho Real pelo Conteúdo")
+st.title("✂️ Bazzott Love Edit - Tamanho Real")
 
 if 'galeria' not in st.session_state: st.session_state.galeria = []
 
@@ -152,14 +140,13 @@ if st.session_state.galeria:
             c1, c2, c3 = st.columns([1, 2, 2])
             with c1: st.image(item['img'], width=80)
             with c2:
-                t_cm = st.number_input("Medida Lado Maior (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
+                t_cm = st.number_input("Lado Maior (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
                 q_norm = st.number_input("Qtd Normal", 0, 100, key=f"q{i}", value=st.session_state.get(f"q{i}", 24))
             with c3:
                 s_cm = st.slider("Sangria (cm)", 0.0, 2.0, key=f"s{i}", value=st.session_state.get(f"s{i}", 0.1))
                 q_esp = st.number_input("Qtd Espelho", 0, 100, key=f"qe{i}", value=0)
                 l_ativa = st.checkbox("Linha Preta", True, key=f"l{i}")
             
-            # Gerar Peças Individuais
             if q_norm > 0:
                 p_n = gerar_peca_final(item['img'], t_cm, s_cm, l_ativa, suave, linha_w, False)
                 if p_n: 
@@ -170,12 +157,8 @@ if st.session_state.galeria:
                     for _ in range(q_esp): fila_processamento.append(p_e)
 
     if st.button("🚀 GERAR PDF FINAL", use_container_width=True):
-        with st.spinner("Organizando na folha..."):
-            folhas_finais = organizar_no_a4(fila_processamento, margem_folha)
-            if folhas_finais:
-                for idx, folha in enumerate(folhas_finais):
-                    st.image(folha, caption=f"Página {idx+1}")
-                
-                pdf_bytes = io.BytesIO()
-                folhas_finais[0].save(pdf_bytes, format="PDF", save_all=True, append_images=folhas_finais[1:], resolution=300.0)
-                st.download_button("📥 Baixar PDF Precisão", pdf_bytes.getvalue(), "Bazzott_Love_Final.pdf", use_container_width=True)
+        folhas_finais = organizar_no_a4(fila_processamento, margem_folha)
+        if folhas_finais:
+            pdf_bytes = io.BytesIO()
+            folhas_finais[0].save(pdf_bytes, format="PDF", save_all=True, append_images=folhas_finais[1:], resolution=300.0)
+            st.download_button("📥 Baixar PDF Precisão", pdf_bytes.getvalue(), "Bazzott_Precision.pdf", use_container_width=True)
