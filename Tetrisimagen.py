@@ -1,7 +1,7 @@
 import streamlit as st
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image, ImageChops, ImageFilter, ImageOps
 import io
-import random
+import time
 
 # --- CONFIGURAÇÕES TÉCNICAS (PRECISÃO 300 DPI) ---
 A4_WIDTH, A4_HEIGHT = 2480, 3508
@@ -11,11 +11,15 @@ def tornar_impar(n):
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-# --- MOTOR DE CONTORNO ---
-def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade):
+# --- MOTOR DE CONTORNO COM ESPELHAMENTO ---
+def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade, espelhar):
     bbox_limpeza = img.getbbox()
     if bbox_limpeza:
         img = img.crop(bbox_limpeza)
+
+    # NOVO: Aplica o espelhamento horizontal se marcado
+    if espelhar:
+        img = ImageOps.mirror(img)
 
     alvo_px = int(medida_cm * CM_TO_PX)
     w, h = img.size
@@ -75,19 +79,14 @@ def montar_folhas(pecas, margem_cm):
         if not inseridos: break
         for idx in sorted(inseridos, reverse=True): lista_pendente.pop(idx)
         
-        bbox = folha.getbbox()
         f_branca = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
-        if bbox:
-            w_c, h_c = bbox[2]-bbox[0], bbox[3]-bbox[1]
-            off_x, off_y = (A4_WIDTH - w_c)//2 - bbox[0], (A4_HEIGHT - h_c)//2 - bbox[1]
-            f_branca.paste(folha, (off_x, off_y), folha)
+        f_branca.paste(folha, (0, 0), folha)
         folhas.append(f_branca)
     return folhas
 
 # --- INTERFACE ---
 st.set_page_config(page_title="Bazzott Lov´s Studio Pro", layout="wide")
 
-# Inicializa a galeria se não existir
 if 'galeria' not in st.session_state:
     st.session_state.galeria = []
 
@@ -96,74 +95,64 @@ with st.sidebar:
     margem = st.slider("Margem da Folha (cm)", 0.5, 2.0, 1.0)
     suave = st.slider("Suavização do Corte", 0, 30, 15)
     
-    st.divider()
-    st.header("🪄 Sincronização em Massa")
-    b_tam = st.number_input("Tamanho do Desenho (cm)", 1.0, 25.0, 4.0)
-    b_qtd = st.number_input("Quantidade Total", 1, 500, 20)
-    b_san = st.slider("Sangria Padrão (cm)", 0.0, 1.0, 0.25, step=0.05)
-    
-    if st.button("Aplicar a Todas as Imagens da Galeria"):
-        for i in range(len(st.session_state.galeria)):
-            st.session_state[f"m{i}"] = b_tam
-            st.session_state[f"q{i}"] = b_qtd
-            st.session_state[f"s{i}"] = b_san
+    if st.button("🗑️ LIMPAR TUDO"):
+        st.session_state.galeria = []
         st.rerun()
 
-# Uploader que alimenta a galeria persistente
+# Uploader
 u = st.file_uploader("Adicionar novos PNGs", type="png", accept_multiple_files=True)
 if u:
     for f in u:
-        # Só adiciona se o nome não estiver na galeria para não duplicar no upload
-        if f.name not in [item['name'] for item in st.session_state.galeria]:
-            # Guardamos os bytes da imagem para que não sumam
-            img_data = Image.open(f).copy()
-            st.session_state.galeria.append({"name": f.name, "img": img_data})
+        # Geramos um ID único usando o tempo para permitir subir a mesma imagem várias vezes
+        uid = f"{f.name}_{time.time()}"
+        img_data = Image.open(f).copy()
+        st.session_state.galeria.append({"id": uid, "name": f.name, "img": img_data})
+    st.rerun()
 
 if st.session_state.galeria:
     pecas_para_pdf = []
     total_figuras = 0
     indices_para_remover = []
 
-    # Exibição da Galeria
     for i, item in enumerate(st.session_state.galeria):
-        # Criamos um container para cada item para colocar o botão X no topo
-        with st.expander(f"🖼️ {item['name']}", expanded=True):
-            col_txt, col_del = st.columns([0.9, 0.1])
+        iid = item['id']
+        with st.expander(f"🖼️ Configurar: {item['name']}", expanded=True):
+            col_del, col_img, col_cfg, col_sang = st.columns([0.1, 0.9, 2, 2])
+            
             with col_del:
-                if st.button("❌", key=f"del_{i}"):
+                if st.button("❌", key=f"del_{iid}"):
                     indices_para_remover.append(i)
             
-            c1, c2, c3 = st.columns([1, 2, 2])
-            with c1: st.image(item['img'], width=80)
-            with c2:
-                t = st.number_input("Tam (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
-                q = st.number_input("Qtd", 1, 500, key=f"q{i}", value=st.session_state.get(f"q{i}", 10))
-            with c3:
-                s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s{i}", value=st.session_state.get(f"s{i}", 0.25), step=0.05)
-                l = st.checkbox("Linha Corte", True, key=f"l{i}")
+            with col_img:
+                st.image(item['img'], width=80)
+                # NOVO: Botão para espelhar esta imagem específica
+                esp = st.checkbox("Espelhar", key=f"esp_{iid}", help="Inverte para fazer o verso da bandeirinha.")
             
-            p_processada = gerar_contorno_individual(item['img'], t, s, l, suave)
-            for _ in range(q): 
+            with col_cfg:
+                t = st.number_input("Tam (cm)", 1.0, 25.0, key=f"m{iid}", value=4.0)
+                q = st.number_input("Qtd", 1, 500, key=f"q{iid}", value=10)
+            
+            with col_sang:
+                s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s{iid}", value=0.25, step=0.05)
+                l = st.checkbox("Linha Corte", True, key=f"l{iid}")
+            
+            # Processamento
+            p_processada = gerar_contorno_individual(item['img'], t, s, l, suave, esp)
+            for _ in range(int(q)): 
                 pecas_para_pdf.append(p_processada)
                 total_figuras += 1
 
-    # Processar remoções fora do loop de interface
     if indices_para_remover:
         for idx in sorted(indices_para_remover, reverse=True):
             st.session_state.galeria.pop(idx)
-            # Limpa chaves de estado relacionadas
-            for k in [f"m{idx}", f"q{idx}", f"s{idx}", f"l{idx}"]:
-                if k in st.session_state: del st.session_state[k]
         st.rerun()
-
-    st.sidebar.markdown(f"### 📊 Resumo")
-    st.sidebar.info(f"Total: **{total_figuras}** figuras")
 
     if st.button(f"🚀 GERAR PDF COM {total_figuras} FIGURAS", use_container_width=True):
         folhas_finais = montar_folhas(pecas_para_pdf, margem)
         if folhas_finais:
-            st.success(f"✅ PDF Gerado com {total_figuras} figuras!")
-            for idx, f in enumerate(folhas_finais): st.image(f, caption=f"Página {idx+1}")
+            for idx, f in enumerate(folhas_finais): 
+                st.image(f, caption=f"Página {idx+1}")
+            
             pdf_output = io.BytesIO()
             folhas_finais[0].save(pdf_output, format="PDF", save_all=True, append_images=folhas_finais[1:], resolution=300.0)
-            st.download_button("📥 Baixar PDF Final", pdf_output.getvalue(), "Bazzott_Lovs_Studio.pdf", use_container_width=True)
+            st.download_button("📥 Baixar PDF Final", pdf_output.getvalue(), "Studio_Bazzott.pdf", use_container_width=True)
