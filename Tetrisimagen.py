@@ -1,6 +1,7 @@
 import streamlit as st
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image, ImageChops, ImageFilter, ImageOps
 import io
+import time
 
 # --- CONFIGURAÇÕES TÉCNICAS (PRECISÃO 300 DPI) ---
 A4_WIDTH, A4_HEIGHT = 2480, 3508
@@ -10,11 +11,17 @@ def tornar_impar(n):
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade):
+def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade, espelhar):
+    # Limpeza de bordas transparentes
     bbox_limpeza = img.getbbox()
     if bbox_limpeza:
         img = img.crop(bbox_limpeza)
 
+    # Espelhamento (para fazer o verso/bandeirinha)
+    if espelhar:
+        img = ImageOps.mirror(img)
+
+    # Redimensionamento
     alvo_px = int(medida_cm * CM_TO_PX)
     w, h = img.size
     proporcao = min(alvo_px / w, alvo_px / h)
@@ -53,7 +60,6 @@ def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_sua
 def montar_folhas(pecas, margem_cm):
     m_px = int(margem_cm * CM_TO_PX)
     e_px = int(0.1 * CM_TO_PX) 
-    
     folhas = []
     lista_pendente = pecas.copy()
     
@@ -93,8 +99,8 @@ if 'galeria' not in st.session_state:
     st.session_state.galeria = []
 
 with st.sidebar:
-    st.header("⚙️ Ajustes de Margem")
-    margem = st.slider("Margem da Folha (cm)", 0.3, 1.5, 0.5, help="Diminua para encaixar mais figuras nas bordas.")
+    st.header("⚙️ Configurações Gerais")
+    margem = st.slider("Margem da Folha (cm)", 0.3, 1.5, 0.5)
     suave = st.slider("Suavização", 0, 30, 15)
     
     st.divider()
@@ -105,16 +111,23 @@ with st.sidebar:
     
     if st.button("Aplicar a Todos"):
         for i in range(len(st.session_state.galeria)):
-            st.session_state[f"m{i}"] = b_tam
-            st.session_state[f"q{i}"] = b_qtd
-            st.session_state[f"s{i}"] = b_san
+            id_item = st.session_state.galeria[i]['id']
+            st.session_state[f"m{id_item}"] = b_tam
+            st.session_state[f"q{id_item}"] = b_qtd
+            st.session_state[f"s{id_item}"] = b_san
         st.rerun()
 
 u = st.file_uploader("Subir PNGs", type="png", accept_multiple_files=True)
 if u:
     for f in u:
-        if f.name not in [img['name'] for img in st.session_state.galeria]:
-            st.session_state.galeria.append({"name": f.name, "img": Image.open(f).copy()})
+        # Gerar um ID único para cada upload, permitindo duplicatas de arquivos
+        id_unico = f"{f.name}_{time.time()}_{len(st.session_state.galeria)}"
+        st.session_state.galeria.append({
+            "id": id_unico,
+            "name": f.name, 
+            "img": Image.open(f).copy()
+        })
+    st.rerun()
 
 if st.session_state.galeria:
     pecas_preparadas = []
@@ -122,34 +135,45 @@ if st.session_state.galeria:
     indices_remover = []
 
     for i, item in enumerate(st.session_state.galeria):
+        iid = item['id']
         with st.expander(f"Configurar: {item['name']}", expanded=True):
-            c_del, c1, c2, c3 = st.columns([0.1, 0.9, 2, 2])
-            with c_del:
-                if st.button("❌", key=f"del_{i}"): indices_remover.append(i)
-            with c1: st.image(item['img'], width=60)
-            with c2:
-                t = st.number_input("cm", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
-                q = st.number_input("un", 1, 500, key=f"q{i}", value=st.session_state.get(f"q{i}", 10))
-            with c3:
-                s = st.slider("Sang", 0.0, 1.0, key=f"s{i}", value=st.session_state.get(f"s{i}", 0.25), step=0.05)
-                l = st.checkbox("Corte", True, key=f"l{i}")
+            # Adicionado coluna para o checkbox de espelhar
+            c_del, c_img, c_ajuste, c_corte = st.columns([0.1, 0.5, 2, 2])
             
-            p = gerar_contorno_individual(item['img'], t, s, l, suave)
+            with c_del:
+                if st.button("❌", key=f"del_{iid}"): 
+                    indices_remover.append(i)
+            
+            with c_img: 
+                st.image(item['img'], width=60)
+                # Checkbox de espelhamento
+                esp = st.checkbox("Espelhar", key=f"esp_{iid}", help="Inverte a imagem para fazer o verso.")
+            
+            with c_ajuste:
+                t = st.number_input("Tamanho (cm)", 1.0, 25.0, key=f"m{iid}", value=st.session_state.get(f"m{iid}", 4.0))
+                q = st.number_input("Quantidade (un)", 1, 500, key=f"q{iid}", value=st.session_state.get(f"q{iid}", 10))
+            
+            with c_corte:
+                s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s{iid}", value=st.session_state.get(f"s{iid}", 0.25), step=0.05)
+                l = st.checkbox("Linha de Corte", True, key=f"l{iid}")
+            
+            # Passa o parâmetro 'esp' para a função de contorno
+            p = gerar_contorno_individual(item['img'], t, s, l, suave, esp)
             for _ in range(q): 
                 pecas_preparadas.append(p)
                 total_figuras += 1
 
     if indices_remover:
-        for idx in sorted(indices_remover, reverse=True): st.session_state.galeria.pop(idx)
+        for idx in sorted(indices_remover, reverse=True): 
+            st.session_state.galeria.pop(idx)
         st.rerun()
 
     if st.button(f"🚀 GERAR E VISUALIZAR ({total_figuras} figuras)", use_container_width=True):
         folhas = montar_folhas(pecas_preparadas, margem)
         if folhas:
             st.subheader("🖼️ Pré-visualização das Páginas")
-            # Mostra as imagens na tela antes do botão de download 
             for idx, f in enumerate(folhas):
-                st.image(f, caption=f"Página {idx+1} - Verifique o encaixe nas bordas", use_container_width=True)
+                st.image(f, caption=f"Página {idx+1}", use_container_width=True)
             
             pdf_bytes = io.BytesIO()
             folhas[0].save(pdf_bytes, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
