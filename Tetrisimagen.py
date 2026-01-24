@@ -10,13 +10,13 @@ def tornar_impar(n):
     n = int(n)
     return n if n % 2 != 0 else n + 1
 
-# --- MOTOR DE CONTORNO ---
-def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade, espelhar):
+# --- MOTOR DE CONTORNO (Agora com suporte a espelhamento interno) ---
+def gerar_contorno_individual(img, medida_cm, sangria_cm, linha_ativa, nivel_suavidade, espelhar=False):
     bbox_limpeza = img.getbbox()
     if bbox_limpeza:
         img = img.crop(bbox_limpeza)
 
-    # NOVO: Espelhar a imagem se o checkbox estiver marcado
+    # Aplica espelhamento se solicitado
     if espelhar:
         img = ImageOps.mirror(img)
 
@@ -78,8 +78,12 @@ def montar_folhas(pecas, margem_cm):
         if not inseridos: break
         for idx in sorted(inseridos, reverse=True): lista_pendente.pop(idx)
         
+        bbox = folha.getbbox()
         f_branca = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), (255, 255, 255))
-        f_branca.paste(folha, (0, 0), folha)
+        if bbox:
+            w_c, h_c = bbox[2]-bbox[0], bbox[3]-bbox[1]
+            off_x, off_y = (A4_WIDTH - w_c)//2 - bbox[0], (A4_HEIGHT - h_c)//2 - bbox[1]
+            f_branca.paste(folha, (off_x, off_y), folha)
         folhas.append(f_branca)
     return folhas
 
@@ -95,17 +99,16 @@ with st.sidebar:
     suave = st.slider("Suavização do Corte", 0, 30, 15)
     
     st.divider()
-    if st.button("Limpar Galeria"):
+    if st.button("🗑️ LIMPAR TUDO"):
         st.session_state.galeria = []
         st.rerun()
 
 u = st.file_uploader("Adicionar novos PNGs", type="png", accept_multiple_files=True)
 if u:
     for f in u:
-        img_data = Image.open(f).copy()
-        # Voltamos a usar apenas o nome do arquivo como identificador
-        st.session_state.galeria.append({"name": f.name, "img": img_data})
-    st.rerun()
+        if f.name not in [item['name'] for item in st.session_state.galeria]:
+            img_data = Image.open(f).copy()
+            st.session_state.galeria.append({"name": f.name, "img": img_data})
 
 if st.session_state.galeria:
     pecas_para_pdf = []
@@ -118,26 +121,33 @@ if st.session_state.galeria:
             
             with col_img: 
                 st.image(item['img'], width=80)
-                # Checkbox simples de espelhar
-                esp = st.checkbox("Espelhar", key=f"esp_{i}")
             
             with col_cfg:
-                t = st.number_input("Tam (cm)", 1.0, 25.0, key=f"m{i}", value=4.0)
-                q = st.number_input("Qtd", 1, 500, key=f"q{i}", value=10)
+                t = st.number_input("Tam (cm)", 1.0, 25.0, key=f"m{i}", value=st.session_state.get(f"m{i}", 4.0))
+                q_normal = st.number_input("Qtd Normal", 1, 500, key=f"q{i}", value=st.session_state.get(f"q{i}", 10))
+                # NOVA OPÇÃO: Quantidade Espelhada (Clonagem)
+                q_espelho = st.number_input("Qtd Espelhada (Verso)", 0, 500, key=f"qe{i}", value=0)
             
             with col_sang:
-                s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s{i}", value=0.25, step=0.05)
+                s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s{i}", value=st.session_state.get(f"s{i}", 0.25), step=0.05)
                 l = st.checkbox("Linha Corte", True, key=f"l{i}")
             
             with col_del:
                 if st.button("❌", key=f"del_{i}"):
                     indices_para_remover.append(i)
             
-            # Chama a função passando o estado do espelhamento
-            p_processada = gerar_contorno_individual(item['img'], t, s, l, suave, esp)
-            for _ in range(q): 
-                pecas_para_pdf.append(p_processada)
+            # 1. Gera as peças Normais
+            p_normal = gerar_contorno_individual(item['img'], t, s, l, suave, espelhar=False)
+            for _ in range(q_normal): 
+                pecas_para_pdf.append(p_normal)
                 total_figuras += 1
+            
+            # 2. Gera as peças Espelhadas (Clones)
+            if q_espelho > 0:
+                p_espelho = gerar_contorno_individual(item['img'], t, s, l, suave, espelhar=True)
+                for _ in range(q_espelho):
+                    pecas_para_pdf.append(p_espelho)
+                    total_figuras += 1
 
     if indices_para_remover:
         for idx in sorted(indices_para_remover, reverse=True):
@@ -147,9 +157,8 @@ if st.session_state.galeria:
     if st.button(f"🚀 GERAR PDF COM {total_figuras} FIGURAS", use_container_width=True):
         folhas_finais = montar_folhas(pecas_para_pdf, margem)
         if folhas_finais:
-            for idx, f in enumerate(folhas_finais): 
-                st.image(f, caption=f"Página {idx+1}")
-            
+            st.success(f"✅ PDF Gerado!")
+            for idx, f in enumerate(folhas_finais): st.image(f, caption=f"Página {idx+1}")
             pdf_output = io.BytesIO()
             folhas_finais[0].save(pdf_output, format="PDF", save_all=True, append_images=folhas_finais[1:], resolution=300.0)
-            st.download_button("📥 Baixar PDF Final", pdf_output.getvalue(), "Bazzott_Studio.pdf", use_container_width=True)
+            st.download_button("📥 Baixar PDF Final", pdf_output.getvalue(), "Bazzott_Lovs_Studio.pdf", use_container_width=True)
