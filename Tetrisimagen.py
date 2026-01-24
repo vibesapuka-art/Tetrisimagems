@@ -2,9 +2,9 @@ import streamlit as st
 from PIL import Image, ImageOps, ImageFilter
 import io
 import time
-import random
+import hashlib
 
-# --- CONFIGURAÇÕES TÉCNICAS ---
+# --- CONFIGURAÇÕES TÉCNICAS (300 DPI) ---
 A4_WIDTH, A4_HEIGHT = 2480, 3508
 CM_TO_PX = 118.11 
 
@@ -72,14 +72,14 @@ def montar_folhas(pecas, margem_cm):
     return folhas
 
 # --- INTERFACE ---
-st.set_page_config(page_title="Bazzott Studio FIX", layout="wide")
+st.set_page_config(page_title="Bazzott Studio 1.53.1", layout="wide")
 
 if 'galeria' not in st.session_state:
     st.session_state.galeria = []
 
 with st.sidebar:
     st.title("🛠️ Painel")
-    if st.button("🗑️ LIMPAR TUDO", key="limpar_total"):
+    if st.button("🗑️ LIMPAR TUDO", key="btn_limpar_v3"):
         st.session_state.galeria = []
         st.rerun()
     
@@ -87,60 +87,48 @@ with st.sidebar:
     margem = st.slider("Margem (cm)", 0.3, 1.5, 0.5)
     suave = st.slider("Suavização", 0, 30, 15)
 
-    st.header("🪄 Ajuste em Massa")
-    m_tam = st.number_input("Tam (cm)", 1.0, 25.0, 4.0)
-    m_qtd = st.number_input("Qtd", 1, 500, 10)
-    m_san = st.slider("Sangria", 0.0, 1.0, 0.25, step=0.05)
-    
-    if st.button("✅ Aplicar a Todos", key="btn_massa_sidebar"):
-        for item in st.session_state.galeria:
-            iid = item['id']
-            st.session_state[f"t_{iid}"] = m_tam
-            st.session_state[f"q_{iid}"] = m_qtd
-            st.session_state[f"s_{iid}"] = m_san
-        st.rerun()
-
 # Uploader Principal
-u = st.file_uploader("Suba seus PNGs aqui", type="png", accept_multiple_files=True, key="main_uploader")
+u = st.file_uploader("Suba seus PNGs aqui", type="png", accept_multiple_files=True, key="up_v3")
 if u:
     for f in u:
-        if f.name not in [img['name'] for img in st.session_state.galeria]:
-            # Criamos um ID único para cada imagem baseado no nome e tempo
-            img_id = f"{f.name}_{int(time.time())}"
+        # Gerar um ID baseado no nome e tamanho do arquivo para ser único
+        file_id = hashlib.md5(f.name.encode()).hexdigest()[:10]
+        if file_id not in [img['id'] for img in st.session_state.galeria]:
             st.session_state.galeria.append({
-                "id": img_id, 
+                "id": file_id, 
                 "name": f.name, 
                 "img": Image.open(f).copy()
             })
     st.rerun()
 
-# Exibição da Galeria e Edição
+# Galeria de Edição
 if st.session_state.galeria:
     pecas_preparadas = []
     indices_remover = []
 
     for i, item in enumerate(st.session_state.galeria):
         iid = item['id']
-        # Usamos o ID único na 'key' de cada elemento para evitar erro de duplicata
-        with st.expander(f"📦 Configurar: {item['name']}", expanded=True):
-            c1, c2, c3, c4 = st.columns([0.8, 2, 2, 0.5])
+        with st.container(border=True):
+            c1, c2, c3, c4 = st.columns([1, 2, 2, 0.5])
             
             with c1:
-                st.image(item['img'], width=100)
+                # Na versão 1.53.1, para imagens pequenas, width fixo é melhor que stretch
+                st.image(item['img'], width=120)
+                st.caption(item['name'])
             
             with c2:
-                t = st.number_input("Tamanho (cm)", 1.0, 25.0, key=f"t_{iid}", value=st.session_state.get(f"t_{iid}", 4.0))
-                q = st.number_input("Quantidade", 1, 500, key=f"q_{iid}", value=st.session_state.get(f"q_{iid}", 1))
+                t = st.number_input("Tamanho (cm)", 1.0, 25.0, value=4.0, key=f"t_{iid}")
+                q = st.number_input("Quantidade", 1, 500, value=1, key=f"q_{iid}")
             
             with c3:
-                s = st.slider("Sangria (cm)", 0.0, 1.0, key=f"s_{iid}", value=st.session_state.get(f"s_{iid}", 0.25), step=0.05)
+                s = st.slider("Sangria (cm)", 0.0, 1.0, 0.25, step=0.05, key=f"s_{iid}")
                 l = st.checkbox("Linha de Corte", True, key=f"l_{iid}")
             
             with c4:
                 if st.button("❌", key=f"del_{iid}"):
                     indices_remover.append(i)
 
-            # Processamento para o PDF
+            # Processamento em tempo real
             res = gerar_contorno_individual(item['img'], t, s, l, suave)
             for _ in range(int(q)):
                 pecas_preparadas.append(res)
@@ -151,13 +139,17 @@ if st.session_state.galeria:
         st.rerun()
 
     st.divider()
-    if st.button(f"🚀 GERAR PDF ({len(pecas_preparadas)} FIGURAS)", key="gerar_final"):
-        with st.spinner("Montando páginas..."):
-            folhas = montar_folhas(pecas_preparadas, margem)
-            if folhas:
-                for idx, folha in enumerate(folhas):
-                    st.image(folha, caption=f"Página {idx+1}")
-                
-                buf = io.BytesIO()
-                folhas[0].save(buf, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
-                st.download_button("📥 BAIXAR PROJETO FINAL", buf.getvalue(), "impressao_bazzott.pdf")
+    
+    # Botão de Download
+    if pecas_preparadas:
+        if st.button(f"🚀 GERAR PDF ({len(pecas_preparadas)} FIGURAS)", key="main_gen_v3"):
+            with st.spinner("Preparando páginas para impressão..."):
+                folhas = montar_folhas(pecas_preparadas, margem)
+                if folhas:
+                    # Aqui usamos o novo padrão de largura stretch para o resultado final
+                    for idx, folha in enumerate(folhas):
+                        st.image(folha, caption=f"Página {idx+1}", width="stretch")
+                    
+                    buf = io.BytesIO()
+                    folhas[0].save(buf, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
+                    st.download_button("📥 BAIXAR PROJETO", buf.getvalue(), "studio_v3.pdf", key="dl_v3")
