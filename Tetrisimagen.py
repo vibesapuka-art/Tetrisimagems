@@ -90,7 +90,8 @@ if 'galeria' not in st.session_state:
 
 with st.sidebar:
     st.title("🛠️ Painel de Controle")
-    if st.button("🗑️ LIMPAR TUDO", key="btn_limpar_total", width="stretch"):
+    # CORREÇÃO: Removido width="stretch" que causava TypeError
+    if st.button("🗑️ LIMPAR TUDO", key="btn_limpar_total", use_container_width=True):
         st.session_state.galeria = []
         st.rerun()
 
@@ -105,7 +106,7 @@ with st.sidebar:
     b_qtd = st.number_input("Qtd Geral", 1, 500, 20)
     b_san = st.slider("Sangria Geral (cm)", 0.0, 1.0, 0.25, step=0.05)
     
-    if st.button("Aplicar a Todos", key="btn_massa", width="stretch"):
+    if st.button("Aplicar a Todos", key="btn_massa", use_container_width=True):
         for item in st.session_state.galeria:
             iid = item['id']
             st.session_state[f"m_{iid}"] = b_tam
@@ -117,8 +118,7 @@ u = st.file_uploader("Suba seus PNGs", type="png", accept_multiple_files=True, k
 if u:
     for f in u:
         if f.name not in [img['name'] for img in st.session_state.galeria]:
-            # Criar um ID único persistente para cada arquivo
-            unique_id = f"{f.name}_{int(time.time())}_{random.randint(0, 1000)}"
+            unique_id = f"{int(time.time())}_{random.randint(0, 1000)}"
             st.session_state.galeria.append({
                 "id": unique_id, 
                 "name": f.name, 
@@ -141,10 +141,10 @@ if st.session_state.galeria:
                     indices_remover.append(i)
             
             with c1: 
-                st.image(item['img'], width=60)
+                # Para imagens, width='stretch' é aceito em versões novas ou use_container_width nas antigas
+                st.image(item['img'], width=80)
             
             with c2:
-                # Recuperar valores do session_state usando IDs únicos
                 t = st.number_input("cm", 1.0, 25.0, key=f"m_{iid}", value=st.session_state.get(f"m_{iid}", 4.0))
                 q = st.number_input("un", 1, 500, key=f"q_{iid}", value=st.session_state.get(f"q_{iid}", 10))
             
@@ -162,14 +162,14 @@ if st.session_state.galeria:
             st.session_state.galeria.pop(idx)
         st.rerun()
 
-    if st.button(f"🚀 GERAR E VISUALIZAR ({total_figuras} figuras)", key="btn_gerar_final", width="stretch"):
+    if st.button(f"🚀 GERAR E VISUALIZAR ({total_figuras} figuras)", key="btn_gerar_final", use_container_width=True):
         folhas = montar_folhas(pecas_preparadas, margem)
         if folhas:
             st.subheader("🖼️ Pré-visualização")
             for idx, f in enumerate(folhas):
-                st.image(f, caption=f"Página {idx+1}", width="stretch")
+                st.image(f, caption=f"Página {idx+1}", use_container_width=True)
             
             pdf_bytes = io.BytesIO()
             folhas[0].save(pdf_bytes, format="PDF", save_all=True, append_images=folhas[1:], resolution=300.0)
             st.divider()
-            st.download_button("📥 BAIXAR PDF FINAL", pdf_bytes.getvalue(), "Studio_Final.pdf", key="btn_download_final", width="stretch")
+            st.download_button("📥 BAIXAR PDF FINAL", pdf_bytes.getvalue(), "Studio_Final.pdf", key="btn_download_final", use_container_width=True)
